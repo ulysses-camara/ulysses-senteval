@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "flit_core.buildapi"
+requires = ["flit_core >=3.2,<4"]
+
+[project]
+name = "ulysses-senteval"
+version = "0.1.0"
+description = "TODO"
+authors = [
+    {name="felsiq", email= "felipe.siqueira@usp.br"}
+]
+
+requires-python = ">=3.8"
+
+dependencies = [
+    "numpy >= 1.21.6",
+    "torch >= 1.11.0",
+    "transformers >= 4.16.2",
+    "pandas",
+    "sentence-transformers",
+    "scikit-learn",
+    "buscador @ git+https://github.com/ulysses-camara/ulysses-fetcher@master",
+]
