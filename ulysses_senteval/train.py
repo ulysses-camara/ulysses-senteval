@@ -9,8 +9,7 @@ import torch.nn
 import sklearn.model_selection
 import tqdm
 
-
-DataType = t.Union[torch.Tensor, npt.NDArray[np.float64]]
+from . import utils
 
 
 class LogisticRegression(torch.nn.Module):
@@ -25,7 +24,7 @@ class LogisticRegression(torch.nn.Module):
         return self.params(X)
 
 
-def undersample(X: DataType, y: DataType, random_state: int) -> t.Tuple[DataType, DataType]:
+def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tuple[utils.DataType, utils.DataType]:
     """TODO."""
     rng = np.random.RandomState(random_state)
     classes, freqs = np.unique(y, return_counts=True)
@@ -46,8 +45,13 @@ def undersample(X: DataType, y: DataType, random_state: int) -> t.Tuple[DataType
     return (X, y)
 
 
-def train(dl_train: torch.utils.data.DataLoader, dl_test: torch.utils.data.DataLoader) -> t.Dict[str, t.Any]:
+def train(
+    dl_train: torch.utils.data.DataLoader, dl_test: torch.utils.data.DataLoader, eval_metric: utils.MetricType, device: str
+) -> t.Dict[str, t.Any]:
     """TODO."""
+    if hasattr(eval_metric, "to"):
+        eval_metric = eval_metric.to(device)
+
     return {"test_score": 1.0}
 
 
@@ -61,8 +65,9 @@ def scale_data(X_train: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Ten
 
 
 def kfold_train(
-    X: DataType,
-    y: DataType,
+    X: utils.DataType,
+    y: utils.DataType,
+    eval_metric: utils.MetricType,
     batch_size: int = 64,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
@@ -122,7 +127,7 @@ def kfold_train(
                 batch_size=batch_size,
             )
 
-            cur_res = train(dl_train, dl_test)
+            cur_res = train(dl_train, dl_test, eval_metric=eval_metric, device=device)
 
             for k, v in cur_res.items():
                 all_results[k].append(v)

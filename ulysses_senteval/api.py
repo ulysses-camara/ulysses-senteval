@@ -1,10 +1,14 @@
 """TODO"""
 import typing as t
+import os
 
 import numpy as np
+import torch
 
 from . import train
 from . import assets
+from . import utils
+from . import cache
 
 
 __all__ = [
@@ -19,49 +23,46 @@ class UlyssesSentEval:
         self,
         sentence_model: t.Any,
         tasks: t.Union[str, t.Sequence[str]] = "all",
-        batch_size_embed: int = 32,
         data_dir_path: str = "./ulysses_senteval",
+        cache_embed_key: t.Optional[str] = None,
+        cache_dir: str = "./cache",
         *,
         config: t.Optional[t.Dict[str, t.Any]] = None,
     ):
         """TODO"""
-        self.tasks = assets.TASKS if tasks == "all" else tasks
-        self.sentence_model = sentence_model
-
-        self.data_dir_path = data_dir_path
-
-        batch_size_embed = int(batch_size_embed)
-
-        if batch_size_embed <= 0:
-            raise ValueError(f"'batch_size_embed' must be >= 1 (got {batch_size_embed}).")
-
-        self.batch_size_embed = batch_size_embed
+        tasks = assets.TASKS if tasks == "all" else tasks
 
         unknown_tasks = set()
 
-        for task in self.tasks:
+        for task in tasks:
             if task not in frozenset(assets.TASKS):
                 unknown_tasks.add(task)
 
         if unknown_tasks:
             unknown_task_string = ", ".join(sorted(unknown_tasks))
             raise ValueError(
-                f"Some tasks are not valid task names: {unknown_task_string}.\n" f"Please select tasks from: {assets.TASKS}."
+                f"Some tasks are not valid task names: {unknown_task_string}.\nPlease select tasks from: {assets.TASKS}."
             )
 
-    def embed(self, X_a: t.List[str], X_b: t.Optional[t.List[str]], task: str, **kwargs) -> train.DataType:
+        self.tasks = tasks
+        self.sentence_model = sentence_model
+        self.data_dir_path = data_dir_path
+
+        self.cache_dir = os.path.join(utils.expand_path(cache_dir), cache_embed_key) if cache_embed_key is not None else None
+
+    def embed(self, X_a: t.List[str], X_b: t.Optional[t.List[str]], task: str, **kwargs: t.Any) -> utils.DataType:
         """TODO"""
-        embs_a = self.sentence_model.encode(X_a, show_progress_bar=True, batch_size=self.batch_size_embed)
+        # pylint: disable='unused-argument'
+        embs_a = self.sentence_model.encode(X_a, convert_to_tensor=True, **kwargs)
+        embs_b = self.sentence_model.encode(X_b, convert_to_tensor=True, **kwargs) if X_b is not None else None
 
-        if X_b is None:
-            return embs_a
+        if embs_b is not None:
+            # NOTE: standard output as per 'SentEval: An Evaluation Toolkit for Universal Sentence Representations'.
+            out = torch.hstack((embs_a, embs_b, torch.abs(embs_a - embs_b), embs_a * embs_b))
+        else:
+            out = embs_a
 
-        embs_b = self.sentence_model.encode(X_b, show_progress_bar=True, batch_size=self.batch_size_embed)
-
-        # NOTE: standard output as per 'SentEval: An Evaluation Toolkit for Universal Sentence Representations'.
-        out = np.hstack((embs_a, embs_b, np.abs(embs_a - embs_b), embs_a * embs_b))
-
-        return out
+        return out.cpu()
 
     def evaluate_in_task(
         self,
@@ -69,16 +70,34 @@ class UlyssesSentEval:
         *,
         kwargs_embed: t.Optional[t.Dict[str, t.Any]] = None,
         kwargs_train: t.Optional[t.Dict[str, t.Any]] = None,
+        ignore_cached: bool = False,
     ) -> t.Dict[str, t.Any]:
         """TODO"""
         kwargs_embed = kwargs_embed or {}
         kwargs_train = kwargs_train or {}
 
         (X_a, X_b), y = assets.load_data(task, data_dir_path=self.data_dir_path)
-        embs = self.embed(X_a, X_b, task=task, **kwargs_embed)
-        all_results = train.kfold_train(X=embs, y=y, pbar_desc=f"{task:<4}", **kwargs_train)
 
-        return all_results
+        if not ignore_cached and self.cache_dir is not None:
+            embs = cache.load_from_cache(cache_dir=self.cache_dir, task=task)
+
+        if embs is None:
+            embs = self.embed(X_a, X_b, task=task, **kwargs_embed)
+
+        if not ignore_cached and self.cache_dir is not None:
+            cache.save_in_cache(embs, cache_dir=self.cache_dir, task=task)
+
+        eval_metric = assets.get_eval_metric(task)
+
+        all_results = train.kfold_train(
+            X=embs,
+            y=y,
+            eval_metric=eval_metric,
+            pbar_desc=f"{task:<4}",
+            **kwargs_train,
+        )
+
+        return dict(all_results)
 
     def evaluate(
         self,

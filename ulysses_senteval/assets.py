@@ -5,13 +5,16 @@ import os
 import pandas as pd
 import numpy.typing as npt
 import numpy as np
+import torchmetrics
 import buscador
+
+from . import utils
 
 
 TASK_CODE_TO_NAME = {
     "F1A": "masked_law_name_in_summaries.csv",
     "F1B": "masked_law_name_in_news.csv",
-    # "F2": "code_estatutes_cf88.csv",
+    "F2": "code_estatutes_cf88.csv",
     "F3": "oab_first_part.csv",
     "F4": "oab_second_part.csv",
     "F5": "trf_examinations.csv",
@@ -39,9 +42,7 @@ def load_data(
     task: str, data_dir_path: str
 ) -> t.Tuple[t.Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]], npt.NDArray[np.float64]]:
     """TODO."""
-    data_dir_path = os.path.expandvars(data_dir_path)
-    data_dir_path = os.path.expanduser(data_dir_path)
-    data_dir_path = os.path.abspath(data_dir_path)
+    data_dir_path = utils.expand_path(data_dir_path)
 
     dataset_name = TASK_CODE_TO_NAME[task]
     input_uri = os.path.join(data_dir_path, dataset_name)
@@ -58,3 +59,10 @@ def load_data(
     y = y.astype(float if np.unique(y).size == 2 else int, copy=False)
 
     return (X_a, X_b), y
+
+
+def get_eval_metric(task: str):
+    if task in {"F2"}:
+        return torchmetrics.classification.F1Score(num_classes=25, average="macro")
+
+    return torchmetrics.classification.BinaryMatthewsCorrCoef()

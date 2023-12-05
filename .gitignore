@@ -2,4 +2,5 @@
 models/
 test.py
 venv/
+cache/
 **/*.csv

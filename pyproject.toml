@@ -19,5 +19,6 @@ dependencies = [
     "pandas",
     "sentence-transformers",
     "scikit-learn",
+    "torchmetrics",
     "buscador @ git+https://github.com/ulysses-camara/ulysses-fetcher@master",
 ]
