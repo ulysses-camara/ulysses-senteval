@@ -46,8 +46,7 @@ class UlyssesSentEval:
         if unknown_tasks:
             unknown_task_string = ", ".join(sorted(unknown_tasks))
             raise ValueError(
-                f"Some tasks are not valid task names: {unknown_task_string}.\n"
-                f"Please select tasks from: {assets.TASKS}."
+                f"Some tasks are not valid task names: {unknown_task_string}.\n" f"Please select tasks from: {assets.TASKS}."
             )
 
     def embed(self, X_a: t.List[str], X_b: t.Optional[t.List[str]], task: str, **kwargs) -> train.DataType:

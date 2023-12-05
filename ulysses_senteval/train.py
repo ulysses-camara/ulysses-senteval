@@ -15,6 +15,7 @@ DataType = t.Union[torch.Tensor, npt.NDArray[np.float64]]
 
 class LogisticRegression(torch.nn.Module):
     """TODO."""
+
     # pylint: disable='missing-method-docstring'
 
     def __init__(self, input_dim: int, output_dim: int):
@@ -37,7 +38,7 @@ def undersample(X: DataType, y: DataType, random_state: int) -> t.Tuple[DataType
     for i, cls in enumerate(classes):
         cur_inds = np.flatnonzero(y == cls)
         cur_inds = rng.choice(cur_inds, size=freq_min, replace=False)
-        sampled_inds[i * freq_min:(i + 1) * freq_min] = cur_inds
+        sampled_inds[i * freq_min : (i + 1) * freq_min] = cur_inds
 
     X = X[sampled_inds, :]
     y = y[sampled_inds]
@@ -59,7 +60,18 @@ def scale_data(X_train: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Ten
     return (X_train, X_test)
 
 
-def kfold_train(X: DataType, y: DataType, batch_size: int = 64, device: t.Union[torch.device, str] = "cuda:0", show_progress_bar: bool = True, *, n_repeats: int = 5, k_fold: int = 5, random_state: int = 9847706, pbar_desc: t.Optional[str] = None) -> t.Dict[str, t.Any]:
+def kfold_train(
+    X: DataType,
+    y: DataType,
+    batch_size: int = 64,
+    device: t.Union[torch.device, str] = "cuda:0",
+    show_progress_bar: bool = True,
+    *,
+    n_repeats: int = 5,
+    k_fold: int = 5,
+    random_state: int = 9847706,
+    pbar_desc: t.Optional[str] = None,
+) -> t.Dict[str, t.Any]:
     """TODO."""
     reseeder = np.random.RandomState(random_state)
     seeds_undersampling, seeds_kfold = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats))

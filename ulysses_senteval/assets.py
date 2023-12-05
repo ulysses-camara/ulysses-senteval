@@ -35,7 +35,9 @@ def download_dataset(task: str) -> None:
     print("Downloaded:", task)
 
 
-def load_data(task: str, data_dir_path: str) -> t.Tuple[t.Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]], npt.NDArray[np.float64]]:
+def load_data(
+    task: str, data_dir_path: str
+) -> t.Tuple[t.Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]], npt.NDArray[np.float64]]:
     """TODO."""
     data_dir_path = os.path.expandvars(data_dir_path)
     data_dir_path = os.path.expanduser(data_dir_path)
