@@ -76,7 +76,7 @@ class UlyssesSentEval:
         kwargs_embed = kwargs_embed or {}
         kwargs_train = kwargs_train or {}
 
-        (X_a, X_b), y = assets.load_data(task, data_dir_path=self.data_dir_path)
+        (X_a, X_b), y, n_classes = assets.load_data(task, data_dir_path=self.data_dir_path)
 
         if not ignore_cached and self.cache_dir is not None:
             embs = cache.load_from_cache(cache_dir=self.cache_dir, task=task)
@@ -87,13 +87,14 @@ class UlyssesSentEval:
         if not ignore_cached and self.cache_dir is not None:
             cache.save_in_cache(embs, cache_dir=self.cache_dir, task=task)
 
-        eval_metric = assets.get_eval_metric(task)
+        eval_metric = assets.get_eval_metric(task=task, n_classes=n_classes)
 
         all_results = train.kfold_train(
             X=embs,
             y=y,
+            n_classes=n_classes,
             eval_metric=eval_metric,
-            pbar_desc=f"{task:<4}",
+            pbar_desc=f"Task: {task:<4}",
             **kwargs_train,
         )
 

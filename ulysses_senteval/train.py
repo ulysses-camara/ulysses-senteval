@@ -18,7 +18,11 @@ class LogisticRegression(torch.nn.Module):
     # pylint: disable='missing-method-docstring'
 
     def __init__(self, input_dim: int, output_dim: int):
-        self.params = torch.nn.Linear(input_dim, output_dim, bias=True)
+        super().__init__()
+        self.params = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, output_dim, bias=True),
+            torch.nn.Flatten(start_dim=0),
+        )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         return self.params(X)
@@ -46,13 +50,106 @@ def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tu
 
 
 def train(
-    dl_train: torch.utils.data.DataLoader, dl_test: torch.utils.data.DataLoader, eval_metric: utils.MetricType, device: str
+    dl_train: torch.utils.data.DataLoader,
+    dl_eval: torch.utils.data.DataLoader,
+    dl_test: torch.utils.data.DataLoader,
+    n_classes: int,
+    eval_metric: utils.MetricType,
+    n_epochs: int,
+    tenacity: int,
+    device: str,
 ) -> t.Dict[str, t.Any]:
     """TODO."""
     if hasattr(eval_metric, "to"):
         eval_metric = eval_metric.to(device)
 
-    return {"test_score": 1.0}
+    is_binary_classification = n_classes == 2
+
+    _, m = next(iter(dl_test))[0].shape
+
+    # TODO: make LogisticRegression initialization reproducible.
+
+    classifier = LogisticRegression(
+        input_dim=m,
+        output_dim=1 if is_binary_classification else n_classes,
+    )
+
+    classifier = classifier.to(device)
+
+    # TODO: hyper-parameter search with grid search.
+
+    optim = torch.optim.AdamW(classifier.parameters(), lr=1e-4, weight_decay=1e-2)
+
+    if is_binary_classification:
+        loss_fn = torch.nn.BCEWithLogitsLoss()
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss()
+
+    early_stopping_count = 0
+    best_loss_eval = np.inf
+
+    output: t.Dict[str, t.Any] = {
+        "loss_per_epoch_train": [],
+        "loss_per_epoch_eval": [],
+        "metric_per_epoch_eval": [],
+        "loss_test": np.nan,
+        "metric_test": np.nan,
+    }
+
+    def no_grad_epoch(dl: torch.utils.data.DataLoader) -> t.Tuple[float, float]:
+        classifier.eval()
+        all_preds: t.List[torch.Tensor] = []
+        all_true: t.List[torch.Tensor] = []
+
+        with torch.no_grad():
+            for X_batch, y_batch in dl:
+                X_batch = X_batch.to(device)
+                y_preds = classifier(X_batch)
+                all_preds.append(y_preds.cpu())
+                all_true.append(y_batch.cpu())
+
+            concat_all_preds = torch.hstack(all_preds).to(device)
+            concat_all_true = torch.hstack(all_true).to(device)
+
+            loss = float(loss_fn(concat_all_preds, concat_all_true).cpu().item())
+            metric_val = float(eval_metric(concat_all_preds, concat_all_true).cpu().item())
+
+        return (loss, metric_val)
+
+    for epoch in np.arange(n_epochs):
+        classifier.train()
+        all_loss_train: t.List[float] = []
+
+        for X_batch, y_batch in dl_train:
+            (X_batch, y_batch) = (X_batch.to(device), y_batch.to(device))
+            optim.zero_grad()
+            y_preds = classifier(X_batch)
+            loss_train = loss_fn(y_preds, y_batch)
+            loss_train.backward()
+            optim.step()
+
+            all_loss_train.append(float(loss_train.detach().cpu().item()))
+
+        loss_eval, metric_eval = no_grad_epoch(dl_eval)
+
+        output["loss_per_epoch_train"].append(float(np.mean(all_loss_train)))
+        output["loss_per_epoch_eval"].append(float(loss_eval))
+        output["metric_per_epoch_eval"].append(float(metric_eval))
+
+        if loss_eval < best_loss_eval:
+            best_loss_eval = loss_eval
+            early_stopping_count = 0
+        else:
+            early_stopping_count += 1
+
+        if early_stopping_count > tenacity:
+            break
+
+    loss_test, metric_test = no_grad_epoch(dl_test)
+    output["loss_test"] = loss_test
+    output["metric_test"] = metric_test
+
+    return output
 
 
 def scale_data(X_train: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Tensor, torch.Tensor]:
@@ -67,13 +164,17 @@ def scale_data(X_train: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Ten
 def kfold_train(
     X: utils.DataType,
     y: utils.DataType,
+    n_classes: int,
     eval_metric: utils.MetricType,
+    *,
     batch_size: int = 64,
+    eval_frac: float = 0.15,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
-    *,
     n_repeats: int = 5,
     k_fold: int = 5,
+    n_epochs: int = 30,
+    tenacity: int = 5,
     random_state: int = 9847706,
     pbar_desc: t.Optional[str] = None,
 ) -> t.Dict[str, t.Any]:
@@ -90,7 +191,13 @@ def kfold_train(
 
     all_results = collections.defaultdict(list)
 
-    pbar = tqdm.tqdm(np.arange(n_repeats * k_fold), desc=pbar_desc)
+    pbar = tqdm.tqdm(
+        total=n_repeats * k_fold,
+        desc=pbar_desc,
+        disable=not show_progress_bar,
+        unit=" partition",
+        leave=False,
+    )
 
     for i in np.arange(n_repeats):
         X_cur, y_cur = undersample(X, y, random_state=seeds_undersampling[i])
@@ -105,8 +212,14 @@ def kfold_train(
             X_train, X_test = X_cur[inds_train, :], X_cur[inds_test, :]
             y_train, y_test = y_cur[inds_train], y_cur[inds_test]
 
+            eval_size = int(np.ceil(eval_frac * inds_train.size))
+            X_eval, X_train = X_train[:eval_size, :], X_train[eval_size:, :]
+            y_eval, y_train = y_train[:eval_size], y_train[eval_size:]
+
             assert len(X_train) == len(y_train)
+            assert len(X_eval) == len(y_eval)
             assert len(X_test) == len(y_test)
+            assert len(X_train) >= max(len(X_eval), len(X_test))
 
             X_train, X_test = scale_data(X_train, X_test)
 
@@ -120,6 +233,13 @@ def kfold_train(
                 generator=torch_rng,
             )
 
+            dl_eval = torch.utils.data.DataLoader(
+                torch.utils.data.TensorDataset(X_eval, y_eval),
+                shuffle=False,
+                drop_last=False,
+                batch_size=batch_size,
+            )
+
             dl_test = torch.utils.data.DataLoader(
                 torch.utils.data.TensorDataset(X_test, y_test),
                 shuffle=False,
@@ -127,11 +247,34 @@ def kfold_train(
                 batch_size=batch_size,
             )
 
-            cur_res = train(dl_train, dl_test, eval_metric=eval_metric, device=device)
+            cur_res = train(
+                dl_train=dl_train,
+                dl_eval=dl_eval,
+                dl_test=dl_test,
+                n_classes=n_classes,
+                eval_metric=eval_metric,
+                n_epochs=n_epochs,
+                tenacity=tenacity,
+                device=device,
+            )
 
             for k, v in cur_res.items():
                 all_results[k].append(v)
 
             pbar.update(1)
 
-    return all_results
+    output: t.Dict[str, t.Any] = {}
+    # TODO: fix this for differently-sized vectors.
+    summary_fns = {"avg": np.mean, "std": np.std}
+
+    for k, v in all_results.items():
+        extra_kwargs: t.Dict[str, t.Any] = {}
+
+        if k in {"loss_per_epoch_train", "loss_per_epoch_eval", "metric_per_epoch_eval"}:
+            extra_kwargs["axis"] = 0
+
+        for summary_name, fn_summary in summary_fns.items():
+            output_key = f"{summary_name}_{k}"
+            output[output_key] = fn_summary(v, **extra_kwargs)
+
+    return output

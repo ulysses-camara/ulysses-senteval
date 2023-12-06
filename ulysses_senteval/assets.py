@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import numpy.typing as npt
 import numpy as np
+import torch
 import torchmetrics
 import buscador
 
@@ -40,7 +41,7 @@ def download_dataset(task: str) -> None:
 
 def load_data(
     task: str, data_dir_path: str
-) -> t.Tuple[t.Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]], npt.NDArray[np.float64]]:
+) -> t.Tuple[t.Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]], npt.NDArray[np.float64], int]:
     """TODO."""
     data_dir_path = utils.expand_path(data_dir_path)
 
@@ -58,11 +59,18 @@ def load_data(
     y = df.iloc[:, -1].values
     y = y.astype(float if np.unique(y).size == 2 else int, copy=False)
 
-    return (X_a, X_b), y
+    n_classes = int(np.unique(y).size)
+
+    return (X_a, X_b), y, n_classes
 
 
-def get_eval_metric(task: str):
+class NormalizedBinaryMatthewsCorrCoef(torchmetrics.classification.BinaryMatthewsCorrCoef):
+    def __call__(self, *args: t.Any, **kwargs: t.Any) -> torch.Tensor:
+        return 0.5 * (1.0 + super().__call__(*args, **kwargs))
+
+
+def get_eval_metric(task: str, n_classes: int):
     if task in {"F2"}:
-        return torchmetrics.classification.F1Score(num_classes=25, average="macro")
+        return torchmetrics.classification.F1Score(num_classes=n_classes, average="macro", task="multiclass")
 
-    return torchmetrics.classification.BinaryMatthewsCorrCoef()
+    return NormalizedBinaryMatthewsCorrCoef()
