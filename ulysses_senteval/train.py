@@ -23,7 +23,7 @@ class LogisticRegression(torch.nn.Module):
         super().__init__()
         self.params = torch.nn.Sequential(
             torch.nn.Linear(input_dim, output_dim, bias=True),
-            torch.nn.Flatten(start_dim=0),
+            torch.nn.Flatten(start_dim=0) if output_dim == 1 else torch.nn.Identity(),
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -112,8 +112,8 @@ def train(
                 all_preds.append(y_preds.cpu())
                 all_true.append(y_batch.cpu())
 
-            concat_all_preds = torch.hstack(all_preds).to(device)
-            concat_all_true = torch.hstack(all_true).to(device)
+            concat_all_preds = torch.cat(all_preds).to(device)
+            concat_all_true = torch.cat(all_true).to(device)
 
             loss = float(loss_fn(concat_all_preds, concat_all_true).cpu().item())
             metric_val = float(eval_metric(concat_all_preds, concat_all_true).cpu().item())
