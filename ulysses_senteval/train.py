@@ -157,7 +157,9 @@ def train(
     return output
 
 
-def scale_data(X_train: torch.Tensor, X_eval: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def scale_data(
+    X_train: torch.Tensor, X_eval: torch.Tensor, X_test: torch.Tensor
+) -> t.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """TODO."""
     avg = torch.mean(X_train, dim=0)
     std = 1e-12 + torch.std(X_train, dim=0)
@@ -180,13 +182,20 @@ def summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
             lens = list(map(len, v))
             max_len = int(max(lens))
 
-            avg_per_epoch, std_per_epoch = pd.DataFrame({
-                "epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
-                k: itertools.chain(*v),
-            }).groupby("epoch").agg(("mean", "std")).values.T
+            avg_per_epoch, std_per_epoch = (
+                pd.DataFrame(
+                    {
+                        "epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
+                        k: itertools.chain(*v),
+                    }
+                )
+                .groupby("epoch")
+                .agg(("mean", "std"))
+                .values.T
+            )
 
             output[f"avg_{k}"] = avg_per_epoch
-            output[f"std_{k}"] = std_per_epoch
+            output[f"std_{k}"] = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
 
         else:
             output[f"avg_{k}"] = float(np.mean(v))
@@ -245,7 +254,7 @@ def kfold_train(
         for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
             eval_size = int(np.ceil(eval_frac * inds_train_eval.size))
             reseeder.shuffle(inds_train_eval)
-            inds_train, inds_eval = inds_train_eval[eval_size:], inds_train_eval[:eval_size]
+            (inds_train, inds_eval) = (inds_train_eval[eval_size:], inds_train_eval[:eval_size])
 
             (X_train, X_eval, X_test) = (X_cur[inds_train, :], X_cur[inds_eval, :], X_cur[inds_test, :])
             (y_train, y_eval, y_test) = (y_cur[inds_train], y_cur[inds_eval], y_cur[inds_test])
@@ -255,7 +264,7 @@ def kfold_train(
             assert len(X_test) == len(y_test)
             assert len(X_train) >= max(len(X_eval), len(X_test))
 
-            X_train, X_eval, X_test = scale_data(X_train, X_eval, X_test)
+            (X_train, X_eval, X_test) = scale_data(X_train, X_eval, X_test)
 
             torch_rng = torch.Generator().manual_seed(int(seeds_dl[i * k_fold + j]))
 
