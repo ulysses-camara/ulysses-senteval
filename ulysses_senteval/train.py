@@ -1,4 +1,4 @@
-"""TODO."""
+"""Training pipeline for task classifiers."""
 import typing as t
 import collections
 import itertools
@@ -15,7 +15,7 @@ from . import utils
 
 
 class LogisticRegression(torch.nn.Module):
-    """TODO."""
+    """Logistic regression module."""
 
     # pylint: disable='missing-method-docstring'
 
@@ -31,7 +31,24 @@ class LogisticRegression(torch.nn.Module):
 
 
 def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tuple[utils.DataType, utils.DataType]:
-    """TODO."""
+    """Undersample majority classes to match the minority class frequency.
+
+    Parameters
+    ----------
+    X : npt.NDArray[np.float64] of shape (N, M)
+        Original embeddings.
+
+    y : npt.NDArray of shape (N,)
+        Original targets.
+
+    Returns
+    -------
+    X_undersampled : npt.NDArray[np.float64] of shape (K, M)
+        Undersampled X, where K <= N.
+
+    y_undersampled : npt.NDArray os shape(K,
+        Undersampled y, where K <= N.
+    """
     rng = np.random.RandomState(random_state)
     classes, freqs = np.unique(y, return_counts=True)
 
@@ -51,18 +68,74 @@ def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tu
     return (X, y)
 
 
+def tune_optim_hyperparameters(train_kwargs: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+    """Tune AdamW optimizer hyper-parameters using grid search."""
+    # TODO: apply hyper-parameter tuning.
+    adamw_optim_kwargs: t.Dict[str, t.Any] = {
+        "lr": 1e-4,
+        "weight_decay": 1e-2,
+    }
+    return adamw_optim_kwargs
+
+
 def train(
     dl_train: torch.utils.data.DataLoader,
     dl_eval: torch.utils.data.DataLoader,
     dl_test: torch.utils.data.DataLoader,
+    adamw_optim_kwargs: t.Dict[str, t.Any],
     n_classes: int,
     eval_metric: utils.MetricType,
     n_epochs: int,
     tenacity: int,
+    early_stopping_rel_improv: float,
     device: str,
     param_init_random_state: int,
 ) -> t.Dict[str, t.Any]:
-    """TODO."""
+    """Train
+
+    Parameters
+    ----------
+    dl_train : torch.utils.data.DataLoader
+        Train DataLoader.
+
+    dl_eval : torch.utils.data.DataLoader
+        Evaluation DataLoader.
+
+    dl_test : torch.utils.data.DataLoader
+        Test DataLoader.
+
+    adamw_optim_kwargs : t.Dict[str, t.Any]
+        Arguments for AdamW optimizer.
+
+    n_classes : int
+        Number of classes.
+
+    eval_metric : utils.MetricType
+        Evaluation metric used after each epoch in the validation split and in test split after the
+        training is finished.
+
+    n_epochs : int
+        Number of training epochs.
+
+    tenacity : int
+        Maximum number of subsequent epochs without sufficient validation loss decrease for early
+        stopping.
+
+    early_stopping_rel_improv : float
+        Minimum relative difference between best validation loss and current validation loss to
+        consider it an actual improvement.
+
+    device : str
+        Device to run training and validation.
+
+    param_init_random_state : int
+        Random seed to initialize classifer parameters.
+
+    Returns
+    -------
+    output : t.Dict[str, t.Any]
+        Train, validation, and test split statistics.
+    """
     if hasattr(eval_metric, "to"):
         eval_metric = eval_metric.to(device)
 
@@ -79,9 +152,7 @@ def train(
 
     classifier = classifier.to(device)
 
-    # TODO: hyper-parameter search with grid search.
-
-    optim = torch.optim.AdamW(classifier.parameters(), lr=1e-4, weight_decay=1e-2)
+    optim = torch.optim.AdamW(classifier.parameters(), **adamw_optim_kwargs)
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.05, total_iters=len(dl_train))
 
     if is_binary_classification:
@@ -135,24 +206,29 @@ def train(
 
             all_loss_train.append(float(loss_train.detach().cpu().item()))
 
-        loss_eval, metric_eval = no_grad_epoch(dl_eval)
-
         output["loss_per_epoch_train"].append(float(np.mean(all_loss_train)))
-        output["loss_per_epoch_eval"].append(float(loss_eval))
-        output["metric_per_epoch_eval"].append(float(metric_eval))
 
-        if loss_eval < best_loss_eval:
-            best_loss_eval = loss_eval
-            early_stopping_count = 0
-        else:
-            early_stopping_count += 1
+        if dl_eval is not None:
+            loss_eval, metric_eval = no_grad_epoch(dl_eval)
 
-        if early_stopping_count > tenacity:
-            break
+            output["loss_per_epoch_eval"].append(float(loss_eval))
+            output["metric_per_epoch_eval"].append(float(metric_eval))
 
-    loss_test, metric_test = no_grad_epoch(dl_test)
-    output["loss_test"] = loss_test
-    output["metric_test"] = metric_test
+            rel_diff = -utils.relative_diff(ref=best_loss_eval, val=loss_eval)
+
+            if rel_diff >= early_stopping_rel_improv:
+                best_loss_eval = loss_eval
+                early_stopping_count = 0
+            else:
+                early_stopping_count += 1
+
+            if early_stopping_count > tenacity:
+                break
+
+    if dl_test is not None:
+        loss_test, metric_test = no_grad_epoch(dl_test)
+        output["loss_test"] = loss_test
+        output["metric_test"] = metric_test
 
     return output
 
@@ -160,7 +236,7 @@ def train(
 def scale_data(
     X_train: torch.Tensor, X_eval: torch.Tensor, X_test: torch.Tensor
 ) -> t.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """TODO."""
+    """Apply data standardization in each data split."""
     avg = torch.mean(X_train, dim=0)
     std = 1e-12 + torch.std(X_train, dim=0)
 
@@ -171,8 +247,8 @@ def scale_data(
     return (X_train, X_eval, X_test)
 
 
-def summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
-    """TODO."""
+def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+    """Summarize metrics collected from training."""
     output: t.Dict[str, t.Any] = {}
 
     for k, v in all_results.items():
@@ -218,10 +294,72 @@ def kfold_train(
     k_fold: int = 5,
     n_epochs: int = 30,
     tenacity: int = 5,
+    early_stopping_rel_improv: float = 0.0025,
     random_state: int = 9847706,
     pbar_desc: t.Optional[str] = None,
 ) -> t.Dict[str, t.Any]:
-    """TODO."""
+    """Apply repeated 5-fold cross validation in the provided data.
+
+    Classes will be re-balanced using undersampling every cross validation repetition.
+
+    Parameters
+    ----------
+    X : utils.DataType of shape (N, M)
+        Data embeddings.
+
+    y : utils.DataType of shape (N,)
+        Target labels.
+
+    n_classes : int
+        Number of classes.
+
+    eval_metric : utils.MetricType
+        Evaluation metric used after each epoch in the validation split and in test split after the
+        training is finished.
+
+    Keyword-only parameters
+    ----------
+    batch_size : int, default=64
+        Training and evaluation batch size.
+
+    eval_frac : float, default=0.10
+        Evaluation split fraction with respect to the train split size.
+
+    device : t.Union[torch.device, str], default="cuda:0"
+        Device to run training and validation.
+
+    show_progress_bar : bool, default=True
+        If True, show progress bar.
+
+    n_repeats : int, default=5
+        Number of cross validation repetitions.
+        For each repetition, all random number generators are reseeded, and classes are rebalanced.
+
+    k_fold : int, default=5
+        Number of folds for each cross validation.
+
+    n_epochs : int, default=30
+        Number of training epochs.
+
+    tenacity : int, default=5
+        Maximum number of subsequent epochs without sufficient validation loss decrease for early
+        stopping.
+
+    early_stopping_rel_improv : float, default=0.005
+        Minimum relative difference between best validation loss and current validation loss to
+        consider it an actual improvement.
+
+    random_state : int, default=9847706
+        Random state to keep all results reproducible.
+
+    pbar_desc : t.Optional[str], default=None
+        Progress bar description. Only used in `show_progress_bar=True`.
+
+    Returns
+    -------
+    output : t.Dict[str, t.Any]
+        Summarized train, validation, and test split statistics.
+    """
     reseeder = np.random.RandomState(random_state)
     seeds_undersampling, seeds_kfold = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats))
     seeds_param_init, seeds_dl = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats * k_fold))
@@ -290,23 +428,27 @@ def kfold_train(
                 batch_size=batch_size,
             )
 
-            cur_res = train(
-                dl_train=dl_train,
-                dl_eval=dl_eval,
-                dl_test=dl_test,
-                n_classes=n_classes,
-                eval_metric=eval_metric,
-                n_epochs=n_epochs,
-                tenacity=tenacity,
-                device=device,
-                param_init_random_state=seeds_param_init[i * k_fold + j],
-            )
+            train_kwargs: t.Dict[str, t.Any] = {
+                "dl_train": dl_train,
+                "dl_eval": dl_eval,
+                "dl_test": dl_test,
+                "n_classes": n_classes,
+                "eval_metric": eval_metric,
+                "n_epochs": n_epochs,
+                "tenacity": tenacity,
+                "early_stopping_rel_improv": early_stopping_rel_improv,
+                "device": device,
+                "param_init_random_state": seeds_param_init[i * k_fold + j],
+            }
+
+            adamw_optim_kwargs = tune_optim_hyperparameters(train_kwargs)
+            cur_res = train(**train_kwargs, adamw_optim_kwargs=adamw_optim_kwargs)
 
             for k, v in cur_res.items():
                 all_results[k].append(v)
 
             pbar.update(1)
 
-    output = summarize_metrics(all_results)
+    output = _summarize_metrics(all_results)
 
     return output
