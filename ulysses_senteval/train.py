@@ -1,7 +1,9 @@
 """TODO."""
 import typing as t
 import collections
+import itertools
 
+import pandas as pd
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -58,27 +60,29 @@ def train(
     n_epochs: int,
     tenacity: int,
     device: str,
+    param_init_random_state: int,
 ) -> t.Dict[str, t.Any]:
     """TODO."""
     if hasattr(eval_metric, "to"):
         eval_metric = eval_metric.to(device)
 
     is_binary_classification = n_classes == 2
+    _, input_dim = next(iter(dl_test))[0].shape
 
-    _, m = next(iter(dl_test))[0].shape
+    with torch.random.fork_rng(devices=["cpu"]):
+        torch.random.manual_seed(param_init_random_state)
 
-    # TODO: make LogisticRegression initialization reproducible.
-
-    classifier = LogisticRegression(
-        input_dim=m,
-        output_dim=1 if is_binary_classification else n_classes,
-    )
+        classifier = LogisticRegression(
+            input_dim=input_dim,
+            output_dim=1 if is_binary_classification else n_classes,
+        )
 
     classifier = classifier.to(device)
 
     # TODO: hyper-parameter search with grid search.
 
     optim = torch.optim.AdamW(classifier.parameters(), lr=1e-4, weight_decay=1e-2)
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.05, total_iters=len(dl_train))
 
     if is_binary_classification:
         loss_fn = torch.nn.BCEWithLogitsLoss()
@@ -127,6 +131,7 @@ def train(
             loss_train = loss_fn(y_preds, y_batch)
             loss_train.backward()
             optim.step()
+            warmup_scheduler.step()
 
             all_loss_train.append(float(loss_train.detach().cpu().item()))
 
@@ -152,13 +157,42 @@ def train(
     return output
 
 
-def scale_data(X_train: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Tensor, torch.Tensor]:
+def scale_data(X_train: torch.Tensor, X_eval: torch.Tensor, X_test: torch.Tensor) -> t.Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """TODO."""
     avg = torch.mean(X_train, dim=0)
     std = 1e-12 + torch.std(X_train, dim=0)
+
     X_train = (X_train - avg) / std
     X_test = (X_test - avg) / std
-    return (X_train, X_test)
+    X_eval = (X_eval - avg) / std
+
+    return (X_train, X_eval, X_test)
+
+
+def summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+    """TODO."""
+    output: t.Dict[str, t.Any] = {}
+
+    for k, v in all_results.items():
+        val_type = type(v[0])
+
+        if hasattr(val_type, "__len__"):
+            lens = list(map(len, v))
+            max_len = int(max(lens))
+
+            avg_per_epoch, std_per_epoch = pd.DataFrame({
+                "epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
+                k: itertools.chain(*v),
+            }).groupby("epoch").agg(("mean", "std")).values.T
+
+            output[f"avg_{k}"] = avg_per_epoch
+            output[f"std_{k}"] = std_per_epoch
+
+        else:
+            output[f"avg_{k}"] = float(np.mean(v))
+            output[f"std_{k}"] = float(np.std(v, ddof=1))
+
+    return output
 
 
 def kfold_train(
@@ -168,7 +202,7 @@ def kfold_train(
     eval_metric: utils.MetricType,
     *,
     batch_size: int = 64,
-    eval_frac: float = 0.15,
+    eval_frac: float = 0.10,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
     n_repeats: int = 5,
@@ -181,7 +215,7 @@ def kfold_train(
     """TODO."""
     reseeder = np.random.RandomState(random_state)
     seeds_undersampling, seeds_kfold = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats))
-    seeds_dl = reseeder.randint(0, 2**32 - 1, size=n_repeats * k_fold)
+    seeds_param_init, seeds_dl = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats * k_fold))
 
     if isinstance(X, np.ndarray):
         X = torch.from_numpy(X)
@@ -208,20 +242,20 @@ def kfold_train(
             shuffle=True,
         )
 
-        for j, (inds_train, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
-            X_train, X_test = X_cur[inds_train, :], X_cur[inds_test, :]
-            y_train, y_test = y_cur[inds_train], y_cur[inds_test]
+        for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
+            eval_size = int(np.ceil(eval_frac * inds_train_eval.size))
+            reseeder.shuffle(inds_train_eval)
+            inds_train, inds_eval = inds_train_eval[eval_size:], inds_train_eval[:eval_size]
 
-            eval_size = int(np.ceil(eval_frac * inds_train.size))
-            X_eval, X_train = X_train[:eval_size, :], X_train[eval_size:, :]
-            y_eval, y_train = y_train[:eval_size], y_train[eval_size:]
+            (X_train, X_eval, X_test) = (X_cur[inds_train, :], X_cur[inds_eval, :], X_cur[inds_test, :])
+            (y_train, y_eval, y_test) = (y_cur[inds_train], y_cur[inds_eval], y_cur[inds_test])
 
             assert len(X_train) == len(y_train)
             assert len(X_eval) == len(y_eval)
             assert len(X_test) == len(y_test)
             assert len(X_train) >= max(len(X_eval), len(X_test))
 
-            X_train, X_test = scale_data(X_train, X_test)
+            X_train, X_eval, X_test = scale_data(X_train, X_eval, X_test)
 
             torch_rng = torch.Generator().manual_seed(int(seeds_dl[i * k_fold + j]))
 
@@ -256,6 +290,7 @@ def kfold_train(
                 n_epochs=n_epochs,
                 tenacity=tenacity,
                 device=device,
+                param_init_random_state=seeds_param_init[i * k_fold + j],
             )
 
             for k, v in cur_res.items():
@@ -263,18 +298,6 @@ def kfold_train(
 
             pbar.update(1)
 
-    output: t.Dict[str, t.Any] = {}
-    # TODO: fix this for differently-sized vectors.
-    summary_fns = {"avg": np.mean, "std": np.std}
-
-    for k, v in all_results.items():
-        extra_kwargs: t.Dict[str, t.Any] = {}
-
-        if k in {"loss_per_epoch_train", "loss_per_epoch_eval", "metric_per_epoch_eval"}:
-            extra_kwargs["axis"] = 0
-
-        for summary_name, fn_summary in summary_fns.items():
-            output_key = f"{summary_name}_{k}"
-            output[output_key] = fn_summary(v, **extra_kwargs)
+    output = summarize_metrics(all_results)
 
     return output
