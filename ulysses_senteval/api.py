@@ -32,6 +32,9 @@ class UlyssesSentEval:
         """TODO"""
         tasks = assets.TASKS if tasks == "all" else tasks
 
+        if isinstance(tasks, str):
+            tasks = (tasks,)
+
         unknown_tasks = set()
 
         for task in tasks:
