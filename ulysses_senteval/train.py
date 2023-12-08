@@ -80,7 +80,7 @@ def tune_optim_hyperparameters(
     best_metric_val = -np.inf
     best_adamw_optim_kwargs: t.Dict[str, t.Any] = {}
 
-    for lr, b1, b2 in itertools.product((5e-5, 1e-4, 5e-4), (0.9, 0.95), (0.995, 0.999)):
+    for lr, b1, b2 in itertools.product((5e-4, 1e-3, 2e-3), (0.80, 0.90), (0.990, 0.999)):
         adamw_optim_kwargs: t.Dict[str, t.Any] = {"lr": lr, "betas": (b1, b2), "weight_decay": 1e-2}
 
         cur_metric_val = train(
@@ -88,7 +88,7 @@ def tune_optim_hyperparameters(
             dl_eval=None,
             dl_test=dl_eval,
             adamw_optim_kwargs=adamw_optim_kwargs,
-            n_epochs=10,
+            n_epochs=8,
             tenacity=-1,
             early_stopping_rel_improv=-1.0,
             **train_kwargs,
