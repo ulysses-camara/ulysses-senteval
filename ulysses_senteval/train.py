@@ -2,6 +2,7 @@
 import typing as t
 import collections
 import itertools
+import multiprocessing
 
 import pandas as pd
 import numpy as np
@@ -25,6 +26,8 @@ class LogisticRegression(torch.nn.Module):
             torch.nn.Linear(input_dim, output_dim, bias=True),
             torch.nn.Flatten(start_dim=0) if output_dim == 1 else torch.nn.Identity(),
         )
+
+        torch.nn.init.constant_(self.params[0].bias, 0.0)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         return self.params(X)
@@ -77,15 +80,15 @@ def tune_optim_hyperparameters(
     best_metric_val = -np.inf
     best_adamw_optim_kwargs: t.Dict[str, t.Any] = {}
 
-    for lr, weight_decay in itertools.product((1e-4, 5e-4, 1e-3, 5e-3), (1e-4, 1e-3, 5e-3, 1e-2)):
-        adamw_optim_kwargs: t.Dict[str, t.Any] = {"lr": lr, "weight_decay": weight_decay}
+    for lr, b1, b2 in itertools.product((5e-5, 1e-4, 5e-4), (0.9, 0.95), (0.995, 0.999)):
+        adamw_optim_kwargs: t.Dict[str, t.Any] = {"lr": lr, "betas": (b1, b2), "weight_decay": 1e-2}
 
         cur_metric_val = train(
             dl_train=dl_train,
             dl_eval=None,
             dl_test=dl_eval,
             adamw_optim_kwargs=adamw_optim_kwargs,
-            n_epochs=4,
+            n_epochs=10,
             tenacity=-1,
             early_stopping_rel_improv=-1.0,
             **train_kwargs,
@@ -176,12 +179,8 @@ def train(
     classifier = classifier.to(device)
 
     optim = torch.optim.AdamW(classifier.parameters(), **adamw_optim_kwargs)
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.05, total_iters=len(dl_train))
-
-    if is_binary_classification:
-        loss_fn = torch.nn.BCEWithLogitsLoss()
-    else:
-        loss_fn = torch.nn.CrossEntropyLoss()
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=0.05, total_iters=len(dl_train) // 4)
+    loss_fn = torch.nn.BCEWithLogitsLoss() if is_binary_classification else torch.nn.CrossEntropyLoss()
 
     early_stopping_count = 0
     best_loss_eval = np.inf
@@ -309,13 +308,13 @@ def kfold_train(
     n_classes: int,
     eval_metric: utils.MetricType,
     *,
-    batch_size: int = 64,
-    eval_frac: float = 0.10,
+    batch_size: int = 128,
+    eval_frac: float = 0.20,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
     n_repeats: int = 5,
     k_fold: int = 5,
-    n_epochs: int = 30,
+    n_epochs: int = 100,
     tenacity: int = 5,
     early_stopping_rel_improv: float = 0.0025,
     random_state: int = 9847706,
@@ -342,11 +341,12 @@ def kfold_train(
 
     Keyword-only parameters
     ----------
-    batch_size : int, default=64
+    batch_size : int, default=128
         Training and evaluation batch size.
 
-    eval_frac : float, default=0.10
+    eval_frac : float, default=0.20
         Evaluation split fraction with respect to the train split size.
+        Evaluation instances are randomly sampled after class balancing.
 
     device : t.Union[torch.device, str], default="cuda:0"
         Device to run training and validation.
@@ -361,14 +361,14 @@ def kfold_train(
     k_fold : int, default=5
         Number of folds for each cross validation.
 
-    n_epochs : int, default=30
-        Number of training epochs.
+    n_epochs : int, default=100
+        Maximum number of training epochs.
 
     tenacity : int, default=5
         Maximum number of subsequent epochs without sufficient validation loss decrease for early
         stopping.
 
-    early_stopping_rel_improv : float, default=0.005
+    early_stopping_rel_improv : float, default=0.0025
         Minimum relative difference between best validation loss and current validation loss to
         consider it an actual improvement.
 
@@ -399,7 +399,7 @@ def kfold_train(
         total=n_repeats * k_fold,
         desc=pbar_desc,
         disable=not show_progress_bar,
-        unit=" partition",
+        unit="partition",
         leave=False,
     )
 
