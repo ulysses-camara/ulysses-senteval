@@ -68,20 +68,40 @@ def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tu
     return (X, y)
 
 
-def tune_optim_hyperparameters(train_kwargs: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+def tune_optim_hyperparameters(
+    dl_train: torch.utils.data.DataLoader,
+    dl_eval: torch.utils.data.DataLoader,
+    train_kwargs: t.Dict[str, t.Any],
+) -> t.Dict[str, t.Any]:
     """Tune AdamW optimizer hyper-parameters using grid search."""
-    # TODO: apply hyper-parameter tuning.
-    adamw_optim_kwargs: t.Dict[str, t.Any] = {
-        "lr": 1e-4,
-        "weight_decay": 1e-2,
-    }
-    return adamw_optim_kwargs
+    best_metric_val = -np.inf
+    best_adamw_optim_kwargs: t.Dict[str, t.Any] = {}
+
+    for lr, weight_decay in itertools.product((1e-4, 5e-4, 1e-3, 5e-3), (1e-4, 1e-3, 5e-3, 1e-2)):
+        adamw_optim_kwargs: t.Dict[str, t.Any] = {"lr": lr, "weight_decay": weight_decay}
+
+        cur_metric_val = train(
+            dl_train=dl_train,
+            dl_eval=None,
+            dl_test=dl_eval,
+            adamw_optim_kwargs=adamw_optim_kwargs,
+            n_epochs=4,
+            tenacity=-1,
+            early_stopping_rel_improv=-1.0,
+            **train_kwargs,
+        )["metric_test"]
+
+        if best_metric_val < cur_metric_val:
+            best_metric_val = cur_metric_val
+            best_adamw_optim_kwargs = adamw_optim_kwargs.copy()
+
+    return best_adamw_optim_kwargs
 
 
 def train(
     dl_train: torch.utils.data.DataLoader,
-    dl_eval: torch.utils.data.DataLoader,
-    dl_test: torch.utils.data.DataLoader,
+    dl_eval: t.Optional[torch.utils.data.DataLoader],
+    dl_test: t.Optional[torch.utils.data.DataLoader],
     adamw_optim_kwargs: t.Dict[str, t.Any],
     n_classes: int,
     eval_metric: utils.MetricType,
@@ -91,17 +111,17 @@ def train(
     device: str,
     param_init_random_state: int,
 ) -> t.Dict[str, t.Any]:
-    """Train
+    """Classifier train pipeline.
 
     Parameters
     ----------
     dl_train : torch.utils.data.DataLoader
         Train DataLoader.
 
-    dl_eval : torch.utils.data.DataLoader
+    dl_eval : t.Optional[torch.utils.data.DataLoader]
         Evaluation DataLoader.
 
-    dl_test : torch.utils.data.DataLoader
+    dl_test : t.Optional[torch.utils.data.DataLoader]
         Test DataLoader.
 
     adamw_optim_kwargs : t.Dict[str, t.Any]
@@ -113,6 +133,7 @@ def train(
     eval_metric : utils.MetricType
         Evaluation metric used after each epoch in the validation split and in test split after the
         training is finished.
+        Only used if `dl_eval` and `dl_test` are not None simultaneously.
 
     n_epochs : int
         Number of training epochs.
@@ -120,10 +141,12 @@ def train(
     tenacity : int
         Maximum number of subsequent epochs without sufficient validation loss decrease for early
         stopping.
+        Only used if `dl_eval` is not None.
 
     early_stopping_rel_improv : float
         Minimum relative difference between best validation loss and current validation loss to
         consider it an actual improvement.
+        Only used if `dl_eval` is not None.
 
     device : str
         Device to run training and validation.
@@ -429,20 +452,28 @@ def kfold_train(
             )
 
             train_kwargs: t.Dict[str, t.Any] = {
-                "dl_train": dl_train,
-                "dl_eval": dl_eval,
-                "dl_test": dl_test,
                 "n_classes": n_classes,
                 "eval_metric": eval_metric,
-                "n_epochs": n_epochs,
-                "tenacity": tenacity,
-                "early_stopping_rel_improv": early_stopping_rel_improv,
                 "device": device,
                 "param_init_random_state": seeds_param_init[i * k_fold + j],
             }
 
-            adamw_optim_kwargs = tune_optim_hyperparameters(train_kwargs)
-            cur_res = train(**train_kwargs, adamw_optim_kwargs=adamw_optim_kwargs)
+            adamw_optim_kwargs = tune_optim_hyperparameters(
+                dl_train=dl_train,
+                dl_eval=dl_eval,
+                train_kwargs=train_kwargs,
+            )
+
+            cur_res = train(
+                dl_train=dl_train,
+                dl_eval=dl_eval,
+                dl_test=dl_test,
+                adamw_optim_kwargs=adamw_optim_kwargs,
+                n_epochs=n_epochs,
+                tenacity=tenacity,
+                early_stopping_rel_improv=early_stopping_rel_improv,
+                **train_kwargs,
+            )
 
             for k, v in cur_res.items():
                 all_results[k].append(v)
