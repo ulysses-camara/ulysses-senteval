@@ -2,7 +2,7 @@
 import typing as t
 import collections
 import itertools
-import multiprocessing
+import functools
 
 import pandas as pd
 import numpy as np
@@ -302,12 +302,128 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
     return output
 
 
+def _single_kfold(
+    repetition_id: int,
+    random_state: int,
+    *,
+    X: torch.Tensor,
+    y: torch.Tensor,
+    n_classes: int,
+    eval_metric: utils.MetricType,
+    batch_size: int,
+    eval_frac: float,
+    device: t.Union[torch.device, str],
+    show_progress_bar: bool,
+    k_fold: int,
+    n_epochs: int,
+    tenacity: int,
+    early_stopping_rel_improv: float,
+    pbar_desc: t.Optional[str],
+):
+    """Perform single k-fold cross validation; isolated to support multiprocessing."""
+    reseeder = np.random.RandomState(random_state)
+    (seed_undersampling, seed_kfold) = reseeder.randint(0, 2**32 - 1, size=2)
+    (seeds_param_init, seeds_dl) = reseeder.randint(0, 2**32 - 1, size=(2, k_fold))
+
+    torch.set_num_threads(1)  # NOTE: necessary to avoid deadlocks when indexing tensors.
+
+    (X_cur, y_cur) = undersample(X, y, random_state=seed_undersampling)
+
+    splitter = sklearn.model_selection.StratifiedKFold(
+        n_splits=k_fold,
+        random_state=seed_kfold,
+        shuffle=True,
+    )
+
+    pbar = tqdm.tqdm(
+        total=k_fold,
+        desc=f"{pbar_desc} - rep: {repetition_id + 1}/5",
+        disable=not show_progress_bar,
+        unit="partition",
+        leave=False,
+        position=repetition_id,
+    )
+
+    all_results = collections.defaultdict(list)
+
+    for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
+        eval_size = int(np.ceil(eval_frac * inds_train_eval.size))
+        reseeder.shuffle(inds_train_eval)
+        (inds_train, inds_eval) = (inds_train_eval[eval_size:], inds_train_eval[:eval_size])
+
+        (X_train, X_eval, X_test) = (X_cur[inds_train, :], X_cur[inds_eval, :], X_cur[inds_test, :])
+        (y_train, y_eval, y_test) = (y_cur[inds_train], y_cur[inds_eval], y_cur[inds_test])
+
+        assert len(X_train) == len(y_train)
+        assert len(X_eval) == len(y_eval)
+        assert len(X_test) == len(y_test)
+        assert len(X_train) >= max(len(X_eval), len(X_test))
+
+        (X_train, X_eval, X_test) = scale_data(X_train, X_eval, X_test)
+
+        torch_rng = torch.Generator().manual_seed(int(seeds_dl[j]))
+
+        dl_train = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(X_train, y_train),
+            shuffle=True,
+            drop_last=True,
+            batch_size=batch_size,
+            generator=torch_rng,
+        )
+
+        dl_eval = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(X_eval, y_eval),
+            shuffle=False,
+            drop_last=False,
+            batch_size=batch_size,
+        )
+
+        dl_test = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(X_test, y_test),
+            shuffle=False,
+            drop_last=False,
+            batch_size=batch_size,
+        )
+
+        train_kwargs: t.Dict[str, t.Any] = {
+            "n_classes": n_classes,
+            "eval_metric": eval_metric,
+            "device": device,
+            "param_init_random_state": seeds_param_init[j],
+        }
+
+        adamw_optim_kwargs = tune_optim_hyperparameters(
+            dl_train=dl_train,
+            dl_eval=dl_eval,
+            train_kwargs=train_kwargs,
+        )
+
+        cur_res = train(
+            dl_train=dl_train,
+            dl_eval=dl_eval,
+            dl_test=dl_test,
+            adamw_optim_kwargs=adamw_optim_kwargs,
+            n_epochs=n_epochs,
+            tenacity=tenacity,
+            early_stopping_rel_improv=early_stopping_rel_improv,
+            **train_kwargs,
+        )
+
+        for k, v in cur_res.items():
+            all_results[k].append(v)
+
+        pbar.update(1)
+
+    return all_results
+
+
 def kfold_train(
     X: utils.DataType,
     y: utils.DataType,
     n_classes: int,
     eval_metric: utils.MetricType,
     *,
+    n_processes: int = 5,
     batch_size: int = 128,
     eval_frac: float = 0.20,
     device: t.Union[torch.device, str] = "cuda:0",
@@ -341,6 +457,10 @@ def kfold_train(
 
     Keyword-only parameters
     ----------
+    n_processes : int, default=5
+        Number of processes to compute cross validation repetitions.
+        Selecting values higher than `n_repeats` will not speed up computations.
+
     batch_size : int, default=128
         Training and evaluation batch size.
 
@@ -384,8 +504,6 @@ def kfold_train(
         Summarized train, validation, and test split statistics.
     """
     reseeder = np.random.RandomState(random_state)
-    seeds_undersampling, seeds_kfold = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats))
-    seeds_param_init, seeds_dl = reseeder.randint(0, 2**32 - 1, size=(2, n_repeats * k_fold))
 
     if isinstance(X, np.ndarray):
         X = torch.from_numpy(X)
@@ -393,92 +511,36 @@ def kfold_train(
     if isinstance(y, np.ndarray):
         y = torch.from_numpy(y)
 
+    X.share_memory_()
+    y.share_memory_()
+
     all_results = collections.defaultdict(list)
 
-    pbar = tqdm.tqdm(
-        total=n_repeats * k_fold,
-        desc=pbar_desc,
-        disable=not show_progress_bar,
-        unit="partition",
-        leave=False,
+    fn = functools.partial(
+        _single_kfold,
+        X=X,
+        y=y,
+        n_classes=n_classes,
+        eval_metric=eval_metric,
+        batch_size=batch_size,
+        eval_frac=eval_frac,
+        device=device,
+        show_progress_bar=show_progress_bar,
+        k_fold=k_fold,
+        n_epochs=n_epochs,
+        tenacity=tenacity,
+        early_stopping_rel_improv=early_stopping_rel_improv,
+        pbar_desc=pbar_desc,
     )
 
-    for i in np.arange(n_repeats):
-        X_cur, y_cur = undersample(X, y, random_state=seeds_undersampling[i])
+    repetition_ids = np.arange(n_repeats)
+    repetition_seeds = reseeder.randint(0, 2**32 - 1, size=n_repeats)
+    args = list(zip(repetition_ids, repetition_seeds))
 
-        splitter = sklearn.model_selection.StratifiedKFold(
-            n_splits=k_fold,
-            random_state=seeds_kfold[i],
-            shuffle=True,
-        )
-
-        for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
-            eval_size = int(np.ceil(eval_frac * inds_train_eval.size))
-            reseeder.shuffle(inds_train_eval)
-            (inds_train, inds_eval) = (inds_train_eval[eval_size:], inds_train_eval[:eval_size])
-
-            (X_train, X_eval, X_test) = (X_cur[inds_train, :], X_cur[inds_eval, :], X_cur[inds_test, :])
-            (y_train, y_eval, y_test) = (y_cur[inds_train], y_cur[inds_eval], y_cur[inds_test])
-
-            assert len(X_train) == len(y_train)
-            assert len(X_eval) == len(y_eval)
-            assert len(X_test) == len(y_test)
-            assert len(X_train) >= max(len(X_eval), len(X_test))
-
-            (X_train, X_eval, X_test) = scale_data(X_train, X_eval, X_test)
-
-            torch_rng = torch.Generator().manual_seed(int(seeds_dl[i * k_fold + j]))
-
-            dl_train = torch.utils.data.DataLoader(
-                torch.utils.data.TensorDataset(X_train, y_train),
-                shuffle=True,
-                drop_last=True,
-                batch_size=batch_size,
-                generator=torch_rng,
-            )
-
-            dl_eval = torch.utils.data.DataLoader(
-                torch.utils.data.TensorDataset(X_eval, y_eval),
-                shuffle=False,
-                drop_last=False,
-                batch_size=batch_size,
-            )
-
-            dl_test = torch.utils.data.DataLoader(
-                torch.utils.data.TensorDataset(X_test, y_test),
-                shuffle=False,
-                drop_last=False,
-                batch_size=batch_size,
-            )
-
-            train_kwargs: t.Dict[str, t.Any] = {
-                "n_classes": n_classes,
-                "eval_metric": eval_metric,
-                "device": device,
-                "param_init_random_state": seeds_param_init[i * k_fold + j],
-            }
-
-            adamw_optim_kwargs = tune_optim_hyperparameters(
-                dl_train=dl_train,
-                dl_eval=dl_eval,
-                train_kwargs=train_kwargs,
-            )
-
-            cur_res = train(
-                dl_train=dl_train,
-                dl_eval=dl_eval,
-                dl_test=dl_test,
-                adamw_optim_kwargs=adamw_optim_kwargs,
-                n_epochs=n_epochs,
-                tenacity=tenacity,
-                early_stopping_rel_improv=early_stopping_rel_improv,
-                **train_kwargs,
-            )
-
+    with torch.multiprocessing.Pool(processes=n_processes) as ppool:
+        for cur_res in ppool.starmap(fn, args):
             for k, v in cur_res.items():
-                all_results[k].append(v)
-
-            pbar.update(1)
+                all_results[k].extend(v)
 
     output = _summarize_metrics(all_results)
 
