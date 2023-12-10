@@ -1,6 +1,7 @@
 """User-facing resources."""
 import typing as t
 import os
+import warnings
 
 import numpy as np
 import torch
@@ -78,8 +79,7 @@ class UlyssesSentEval:
         data_dir_path: str = "./ulysses_senteval_datasets",
         cache_embed_key: t.Optional[str] = None,
         cache_dir: str = "./cache",
-        *,
-        config: t.Optional[t.Dict[str, t.Any]] = None,
+        disable_multiprocessing: bool = False,
     ):
         tasks = assets.TASKS if tasks == "all" else tasks
 
@@ -101,6 +101,7 @@ class UlyssesSentEval:
         self.tasks = tasks
         self.sentence_model = sentence_model
         self.data_dir_path = utils.expand_path(data_dir_path)
+        self.disable_multiprocessing = disable_multiprocessing
 
         self.cache_dir = os.path.join(utils.expand_path(cache_dir), cache_embed_key) if cache_embed_key is not None else None
 
@@ -197,6 +198,12 @@ class UlyssesSentEval:
         kwargs_embed = kwargs_embed or {}
         kwargs_train = kwargs_train or {}
 
+        if self.disable_multiprocessing and "n_processes" in kwargs_train:
+            raise ValueError(
+                f"You can not specify '{kwargs_train['n_processes']=}' when {self.disable_multiprocessing=}, "
+                "since 'n_processes=1' will be forced. Please remove 'n_processes' from 'kwargs_train'."
+            )
+
         (X_a, X_b), y, n_classes = assets.load_dataset(
             task,
             data_dir_path=self.data_dir_path,
@@ -209,7 +216,30 @@ class UlyssesSentEval:
             embs = cache.load_from_cache(cache_dir=self.cache_dir, task=task)
 
         if embs is None:
-            embs = self.embed(X_a, X_b, task=task, **kwargs_embed)
+            force_main_process = False
+            if not self.disable_multiprocessing:
+                # NOTE: creating a child process to embed data, since using CUDA in the main process
+                #       will invoke a RuntimeError during classifier training if multiprocessing is enabled:
+                #           "Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing,
+                #            you must use the 'spawn' start method"
+                try:
+                    with utils.disable_torch_multithreading(), torch.multiprocessing.Pool(1) as ppool:
+                        embs = ppool.apply(self.embed, args=(X_a, X_b, task), kwds=kwargs_embed)
+
+                except RuntimeError as err:
+                    if utils.is_cuda_vs_multiprocessing_error(err):
+                        warnings.warn(
+                            "Was not possible to embed data using a subprocess. This means that the CUDA environment "
+                            "had been previously initialized, thus training task classifiers in parallel might not be "
+                            "possible. If this happens to be the case, the training procedure will fallback to a single "
+                            "process.",
+                            RuntimeWarning,
+                        )
+                        force_main_process = True
+
+            if force_main_process or self.disable_multiprocessing:
+                embs = self.embed(X_a, X_b, task=task, **kwargs_embed)
+
             embed_not_cached = True
 
         else:
@@ -225,6 +255,11 @@ class UlyssesSentEval:
 
         assert hasattr(eval_metric, "__call__")
 
+        extra_args: t.Dict[str, t.Any] = {}
+
+        if self.disable_multiprocessing:
+            extra_args["n_processes"] = 1
+
         all_results = train.kfold_train(
             X=embs,
             y=y,
@@ -232,6 +267,7 @@ class UlyssesSentEval:
             eval_metric=eval_metric,
             pbar_desc=f"Task: {task:<4}",
             **kwargs_train,
+            **extra_args,
         )
 
         return dict(all_results)

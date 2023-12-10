@@ -1,6 +1,7 @@
 """General utility functions."""
 import typing as t
 import os
+import contextlib
 
 import numpy as np
 import numpy.typing as npt
@@ -28,3 +29,25 @@ def relative_diff(ref: float, val: float) -> float:
         return 0.0 if np.isinf(val) else -np.inf
 
     return (val - ref) / (1e-12 + ref)
+
+
+def is_cuda_vs_multiprocessing_error(err) -> bool:
+    """Check if a specific CUDA environment exception has been raised.
+
+    This exception is raised when CUDA is being used in a subprocess, but the main process
+    already initialized the CUDA environment.
+    """
+    return str(err).startswith("Cannot re-initialize CUDA")
+
+
+@contextlib.contextmanager
+def disable_torch_multithreading():
+    """Disable PyTorch multithreading to prevent deadlocks in multiprocessing."""
+    n_threads = torch.get_num_threads()
+
+    try:
+        torch.set_num_threads(1)
+        yield
+
+    finally:
+        torch.set_num_threads(n_threads)

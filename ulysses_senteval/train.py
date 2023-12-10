@@ -3,6 +3,7 @@ import typing as t
 import collections
 import itertools
 import functools
+import warnings
 
 import pandas as pd
 import numpy as np
@@ -319,13 +320,12 @@ def _single_kfold(
     tenacity: int,
     early_stopping_rel_improv: float,
     pbar_desc: t.Optional[str],
+    pbar: t.Optional[tqdm.tqdm] = None,
 ):
     """Perform single k-fold cross validation; isolated to support multiprocessing."""
     reseeder = np.random.RandomState(random_state)
     (seed_undersampling, seed_kfold) = reseeder.randint(0, 2**32 - 1, size=2)
     (seeds_param_init, seeds_dl) = reseeder.randint(0, 2**32 - 1, size=(2, k_fold))
-
-    torch.set_num_threads(1)  # NOTE: necessary to avoid deadlocks when indexing tensors.
 
     (X_cur, y_cur) = undersample(X, y, random_state=seed_undersampling)
 
@@ -335,14 +335,15 @@ def _single_kfold(
         shuffle=True,
     )
 
-    pbar = tqdm.tqdm(
-        total=k_fold,
-        desc=f"{pbar_desc} - rep: {repetition_id + 1}/5",
-        disable=not show_progress_bar,
-        unit="partition",
-        leave=False,
-        position=repetition_id,
-    )
+    if pbar is None:
+        pbar = tqdm.tqdm(
+            total=k_fold,
+            desc=f"{pbar_desc} - rep: {repetition_id + 1}/5",
+            disable=not show_progress_bar,
+            unit="partition",
+            leave=False,
+            position=repetition_id,
+        )
 
     all_results = collections.defaultdict(list)
 
@@ -459,6 +460,7 @@ def kfold_train(
     ----------
     n_processes : int, default=5
         Number of processes to compute cross validation repetitions.
+        If n_processes <= 1, will disable multiprocessing.
         Selecting values higher than `n_repeats` will not speed up computations.
 
     batch_size : int, default=128
@@ -516,7 +518,7 @@ def kfold_train(
 
     all_results = collections.defaultdict(list)
 
-    fn = functools.partial(
+    fn_kfold = functools.partial(
         _single_kfold,
         X=X,
         y=y,
@@ -536,9 +538,38 @@ def kfold_train(
     repetition_ids = np.arange(n_repeats)
     repetition_seeds = reseeder.randint(0, 2**32 - 1, size=n_repeats)
     args = list(zip(repetition_ids, repetition_seeds))
+    n_processes = min(n_repeats, n_processes)
 
-    with torch.multiprocessing.Pool(processes=n_processes) as ppool:
-        for cur_res in ppool.starmap(fn, args):
+    if n_processes > 1:
+        try:
+            with utils.disable_torch_multithreading(), torch.multiprocessing.Pool(processes=n_processes) as ppool:
+                for cur_res in ppool.starmap(fn_kfold, args):
+                    for k, v in cur_res.items():
+                        all_results[k].extend(v)
+
+        except RuntimeError as err:
+            if not utils.is_cuda_vs_multiprocessing_error(err):
+                raise err from None
+
+            warnings.warn(
+                "You attempted to use multiprocessing, but the CUDA environment had been previously used in the main "
+                "process. Unfortunately, this prevents training classifiers in a multiprocessing setup. As a result, "
+                "the training process will fallback to using a single process.",
+                RuntimeWarning,
+            )
+            n_processes = 1
+
+    if n_processes <= 1:
+        pbar = tqdm.tqdm(
+            total=n_repeats * k_fold,
+            desc=pbar_desc,
+            disable=not show_progress_bar,
+            unit="partition",
+            leave=False,
+        )
+
+        for rep_id, rep_random_state in args:
+            cur_res = fn_kfold(repetition_id=rep_id, random_state=rep_random_state, pbar=pbar)
             for k, v in cur_res.items():
                 all_results[k].extend(v)
 
