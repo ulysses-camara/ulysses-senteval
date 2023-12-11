@@ -42,7 +42,10 @@ def is_cuda_vs_multiprocessing_error(err) -> bool:
 
 @contextlib.contextmanager
 def disable_torch_multithreading():
-    """Disable PyTorch multithreading to prevent deadlocks in multiprocessing."""
+    """Disable PyTorch multithreading to prevent deadlocks in multiprocessing.
+
+    Read more about this in: https://github.com/pytorch/pytorch/issues/17199.
+    """
     n_threads = torch.get_num_threads()
 
     try:
