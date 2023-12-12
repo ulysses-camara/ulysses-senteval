@@ -133,7 +133,7 @@ class UlyssesSentEval:
         Returns
         -------
         embed : torch.Tensor of shape (N, D) or npt.NDArray[np.float64] of shape (N, D)
-            Embeded (X_a, X_b).
+            Embeded (X_a, X_b) as a single vector per instance.
 
         Examples
         --------
@@ -200,7 +200,24 @@ class UlyssesSentEval:
 
         Returns
         -------
-        results : TODO
+        agg_results : t.Dict[str, t.Any]
+            Results aggregated per epoch. Contains the following keys:
+
+            - `avg_loss_train_per_epoch` (npt.NDArray): avg. (across k-fold & CV repetitions) train loss per epoch;
+            - `avg_loss_eval_per_epoch` (npt.NDArray): avg. (across k-folds & CV repetitions) validation loss per epoch;
+            - `avg_metric_eval_per_epoch` (npt.NDArray): avg. (across k-folds & CV repetitions) validation metric per epoch;
+            - `avg_loss_test` (float): avg. (across CV repetitions) test loss;
+            - `avg_metric_test` (float): avg. (across CV repetitions) test metric;
+            - `std_loss_train_per_epoch` (npt.NDArray): std. (across k-fold & CV repetitions) train loss per epoch;
+            - `std_loss_eval_per_epoch` (npt.NDArray): std. (across k-folds & CV repetitions) validation loss per epoch;
+            - `std_metric_eval_per_epoch` (npt.NDArray): std. (across k-folds & CV repetitions) validation metric per epoch;
+            - `std_loss_test` (float): std. (across CV repetitions) test loss;
+            - `std_metric_test` (float): std. (across CV repetitions) test metric;
+
+        all_results : pd.DataFrame (optional, only if `return_all_results=True`)
+            Pandas DataFrame containing all unaggregated statistics collected from the training procedure.
+            Useful if you want to analyze the raw data, or compute your own aggregated statistics.
+            Contains the following columns: ("kfold_repetition", "train_epoch", "metric", "value").
         """
         kwargs_embed = kwargs_embed or {}
         kwargs_train = kwargs_train or {}
@@ -299,9 +316,49 @@ class UlyssesSentEval:
         kwargs_embed : t.Optional[t.Dict[str, t.Any]], default=None
             Additional arguments for embedding. These are passed directly to `embed` method.
 
+            In the default `embed` method, these arguments are passed to `self.sentence_model.encode`
+            method (which assumes it is a proper `sentence_transformer.SentenceTransformers`). If this
+            behavior is undesired, you will need to provide your own `embed` method.
+
         kwargs_train : t.Optional[t.Dict[str, t.Any]], default=None
             Additional arguments for task classifier training.
-            TODO: add which parameters can be modified here.
+
+            WARNING: to compute results comparable to publish results, hyper-parameters should be kept
+            as their default value (with the exception of `n_processes`, since it doesn't affect results).
+
+            The following training hyper-parameters are available:
+
+            - `n_processes`: (int, default=5)
+                Number of processes to compute cross validation repetitions.
+                If n_processes <= 1, will disable multiprocessing.
+                Selecting values higher than `n_repeats` will not speed up computations.
+            - `batch_size`: (int, default=128)
+                Training and evaluation batch size.
+            - `eval_frac`: (float, default=0.20)
+                Evaluation split fraction with respect to the train split size.
+                Evaluation instances are randomly sampled after class balancing.
+            - `device`: (t.Union[torch.device, str], default="cuda:0")
+                Device to run training and validation.
+            - `show_progress_bar`: (bool, default=True)
+                If True, show progress bar.
+            - `n_repeats`: (int, default=10)
+                Number of cross validation repetitions.
+                For each repetition, all random number generators are reseeded, and classes are rebalanced.
+            - `k_fold`: (int, default=5)
+                Number of folds for each cross validation.
+            - `n_epochs`: (int, default=100)
+                Maximum number of training epochs.
+            - `tenacity`: (int, default=5)
+                Maximum number of subsequent epochs without sufficient validation loss decrease for early
+                stopping.
+            - `early_stopping_rel_improv`: (float, default=0.0025)
+                Minimum relative difference between best validation loss and current validation loss to
+                consider it an actual improvement.
+
+        return_all_results : bool, default=False
+            If True, return a `pandas.DataFrame` containing statistics for every epoch, k-fold
+            repetition, and data split;
+            If False, return just statistics aggregated per task and per epoch.
 
         ignore_cached : bool, default=False
             If True, previously cached embeddings are ignored, and newly created embeddings will
@@ -310,7 +367,25 @@ class UlyssesSentEval:
 
         Returns
         -------
-        results : TODO
+        agg_results : t.Dict[str, t.Dict[str, t.Any]]
+            Results aggregated per task and per epoch. Keys are task names. Values are dictionaries, each containing
+            the following keys:
+
+            - `avg_loss_train_per_epoch` (npt.NDArray): avg. (across k-fold & CV repetitions) train loss per epoch;
+            - `avg_loss_eval_per_epoch` (npt.NDArray): avg. (across k-folds & CV repetitions) validation loss per epoch;
+            - `avg_metric_eval_per_epoch` (npt.NDArray): avg. (across k-folds & CV repetitions) validation metric per epoch;
+            - `avg_loss_test` (float): avg. (across CV repetitions) test loss;
+            - `avg_metric_test` (float): avg. (across CV repetitions) test metric;
+            - `std_loss_train_per_epoch` (npt.NDArray): std. (across k-fold & CV repetitions) train loss per epoch;
+            - `std_loss_eval_per_epoch` (npt.NDArray): std. (across k-folds & CV repetitions) validation loss per epoch;
+            - `std_metric_eval_per_epoch` (npt.NDArray): std. (across k-folds & CV repetitions) validation metric per epoch;
+            - `std_loss_test` (float): std. (across CV repetitions) test loss;
+            - `std_metric_test` (float): std. (across CV repetitions) test metric;
+
+        all_results : pd.DataFrame (optional, only if `return_all_results=True`)
+            Pandas DataFrame containing all unaggregated statistics collected from the training procedure.
+            Useful if you want to analyze the raw data, or compute your own aggregated statistics.
+            Contains the following columns: ("task", "kfold_repetition", "train_epoch", "metric", "value").
         """
         results_per_task: t.Dict[str, t.Any] = {}
 
