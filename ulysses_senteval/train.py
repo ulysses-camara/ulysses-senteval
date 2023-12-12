@@ -447,14 +447,14 @@ def kfold_train(
     eval_frac: float = 0.20,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
-    n_repeats: int = 5,
+    n_repeats: int = 10,
     k_fold: int = 5,
     n_epochs: int = 100,
     tenacity: int = 5,
     early_stopping_rel_improv: float = 0.0025,
     random_state: int = 9847706,
     pbar_desc: t.Optional[str] = None,
-) -> t.Dict[str, t.Any]:
+) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
     """Apply repeated 5-fold cross validation in the provided data.
 
     Classes will be re-balanced using undersampling every cross validation repetition.
@@ -494,7 +494,7 @@ def kfold_train(
     show_progress_bar : bool, default=True
         If True, show progress bar.
 
-    n_repeats : int, default=5
+    n_repeats : int, default=10
         Number of cross validation repetitions.
         For each repetition, all random number generators are reseeded, and classes are rebalanced.
 
