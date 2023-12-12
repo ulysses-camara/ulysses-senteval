@@ -3,6 +3,7 @@ import typing as t
 import os
 import warnings
 
+import pandas as pd
 import numpy as np
 import torch
 
@@ -168,8 +169,9 @@ class UlyssesSentEval:
         *,
         kwargs_embed: t.Optional[t.Dict[str, t.Any]] = None,
         kwargs_train: t.Optional[t.Dict[str, t.Any]] = None,
+        return_all_results: bool = False,
         ignore_cached: bool = False,
-    ) -> t.Dict[str, t.Any]:
+    ) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
         """Evaluate `self.sentence_model` in a single `task`.
 
         Parameters
@@ -184,7 +186,12 @@ class UlyssesSentEval:
 
         kwargs_train : t.Optional[t.Dict[str, t.Any]], default=None
             Additional arguments for task classifier training.
-            TODO: add which parameters can be modified here.
+            See documentation of `evaluate` method for more information.
+
+        return_all_results : bool, default=False
+            If True, return a `pandas.DataFrame` containing statistics for every epoch, k-fold
+            repetition, and data split;
+            If False, return just statistics aggregated per epoch.
 
         ignore_cached : bool, default=False
             If True, previously cached embeddings are ignored, and newly created embeddings will
@@ -260,7 +267,7 @@ class UlyssesSentEval:
         if self.disable_multiprocessing:
             extra_args["n_processes"] = 1
 
-        all_results = train.kfold_train(
+        (aggregated_results, all_results) = train.kfold_train(
             X=embs,
             y=y,
             n_classes=n_classes,
@@ -270,15 +277,21 @@ class UlyssesSentEval:
             **extra_args,
         )
 
-        return dict(all_results)
+        aggregated_results = dict(aggregated_results)
+
+        if return_all_results:
+            return (aggregated_results, all_results)
+
+        return aggregated_results
 
     def evaluate(
         self,
         *,
         kwargs_embed: t.Optional[t.Dict[str, t.Any]] = None,
         kwargs_train: t.Optional[t.Dict[str, t.Any]] = None,
+        return_all_results: bool = False,
         ignore_cached: bool = False,
-    ) -> t.Dict[str, t.Any]:
+    ) -> t.Tuple[t.Dict[str, t.Dict[str, t.Any]], pd.DataFrame]:
         """Evaluate `self.sentence_model` in each tasks specified during initialization.
 
         Keyword-only parameters
@@ -304,14 +317,25 @@ class UlyssesSentEval:
         for task in self.tasks:
             assets.download_dataset(task, data_dir_path=self.data_dir_path)
 
+        all_dfs: t.List[pd.DataFrame] = []
+
         for task in self.tasks:
-            cur_res = self.evaluate_in_task(
+            cur_res, cur_all_results = self.evaluate_in_task(
                 task=task,
                 kwargs_embed=kwargs_embed,
                 kwargs_train=kwargs_train,
+                return_all_results=True,
                 ignore_cached=ignore_cached,
             )
 
             results_per_task[task] = cur_res
+
+            cur_all_results.insert(loc=0, column="task", value=task, allow_duplicates=False)
+            all_dfs.append(cur_all_results)
+
+        all_results = pd.concat(all_dfs, ignore_index=True)
+
+        if return_all_results:
+            return (results_per_task, all_results)
 
         return results_per_task

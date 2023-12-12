@@ -270,9 +270,10 @@ def scale_data(
     return (X_train, X_eval, X_test)
 
 
-def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
     """Summarize metrics collected from training."""
     output: t.Dict[str, t.Any] = {}
+    all_dfs: t.List[pd.DataFrame] = []
 
     for k, v in all_results.items():
         val_type = type(v[0])
@@ -281,17 +282,15 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
             lens = list(map(len, v))
             max_len = int(max(lens))
 
-            avg_per_epoch, std_per_epoch = (
-                pd.DataFrame(
-                    {
-                        "epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
-                        k: itertools.chain(*v),
-                    }
-                )
-                .groupby("epoch")
-                .agg(("mean", "std"))
-                .values.T
+            df_stat_per_epoch = pd.DataFrame(
+                {
+                    "kfold_repetition": itertools.chain(*[[i] * li for i, li in enumerate(lens, 1)]),
+                    "train_epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
+                    k: itertools.chain(*v),
+                }
             )
+
+            avg_per_epoch, std_per_epoch = df_stat_per_epoch.groupby("train_epoch")[k].agg(("mean", "std")).values.T
 
             output[f"avg_{k}"] = avg_per_epoch
             output[f"std_{k}"] = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
@@ -300,7 +299,26 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
             output[f"avg_{k}"] = float(np.mean(v))
             output[f"std_{k}"] = float(np.std(v, ddof=1))
 
-    return output
+            df_stat_per_epoch = pd.DataFrame(
+                {
+                    "kfold_repetition": np.arange(1, 1 + len(v)),
+                    "train_epoch": -1,
+                    k: v,
+                }
+            )
+
+        df_stat_per_epoch = df_stat_per_epoch.melt(
+            id_vars=["kfold_repetition", "train_epoch"],
+            var_name="metric",
+            value_name="value",
+            ignore_index=True,
+        )
+
+        all_dfs.append(df_stat_per_epoch)
+
+    df_all_results = pd.concat(all_dfs, ignore_index=True)
+
+    return (output, df_all_results)
 
 
 def _single_kfold(
@@ -338,7 +356,7 @@ def _single_kfold(
     if pbar is None:
         pbar = tqdm.tqdm(
             total=k_fold,
-            desc=f"{pbar_desc} - rep: {repetition_id + 1}/5",
+            desc=f"{pbar_desc} - rep: {repetition_id + 1:<2}",
             disable=not show_progress_bar,
             unit="partition",
             leave=False,
@@ -573,6 +591,6 @@ def kfold_train(
             for k, v in cur_res.items():
                 all_results[k].extend(v)
 
-    output = _summarize_metrics(all_results)
+    (aggregated_results, all_results) = _summarize_metrics(all_results)
 
-    return output
+    return (aggregated_results, all_results)
