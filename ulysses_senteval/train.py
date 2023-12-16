@@ -270,7 +270,7 @@ def scale_data(
     return (X_train, X_eval, X_test)
 
 
-def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
+def _summarize_metrics(all_results: t.Dict[str, t.Any], k_fold: int) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
     """Summarize metrics collected from training."""
     output: t.Dict[str, t.Any] = {}
     all_dfs: t.List[pd.DataFrame] = []
@@ -284,8 +284,9 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Tuple[t.Dict[str, t
 
             df_stat_per_epoch = pd.DataFrame(
                 {
-                    "kfold_repetition": itertools.chain(*[[i] * li for i, li in enumerate(lens, 1)]),
-                    "train_epoch": itertools.chain(*[np.arange(1, 1 + li) for li in lens]),
+                    "kfold_repetition": itertools.chain(*[[1 + i // k_fold] * li for i, li in enumerate(lens)]),
+                    "kfold_partition": itertools.chain(*[[1 + i % k_fold] * li for i, li in enumerate(lens)]),
+                    "train_epoch": itertools.chain(*[1 + np.arange(li) for li in lens]),
                     k: itertools.chain(*v),
                 }
             )
@@ -301,14 +302,15 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any]) -> t.Tuple[t.Dict[str, t
 
             df_stat_per_epoch = pd.DataFrame(
                 {
-                    "kfold_repetition": np.arange(1, 1 + len(v)),
+                    "kfold_repetition": 1 + (np.arange(len(v)) // k_fold),
+                    "kfold_partition": 1 + (np.arange(len(v)) % k_fold),
                     "train_epoch": -1,
                     k: v,
                 }
             )
 
         df_stat_per_epoch = df_stat_per_epoch.melt(
-            id_vars=["kfold_repetition", "train_epoch"],
+            id_vars=["kfold_repetition", "kfold_partition", "train_epoch"],
             var_name="metric",
             value_name="value",
             ignore_index=True,
@@ -591,6 +593,6 @@ def kfold_train(
             for k, v in cur_res.items():
                 all_results[k].extend(v)
 
-    (aggregated_results, all_results) = _summarize_metrics(all_results)
+    (aggregated_results, all_results) = _summarize_metrics(all_results, k_fold=k_fold)
 
     return (aggregated_results, all_results)
