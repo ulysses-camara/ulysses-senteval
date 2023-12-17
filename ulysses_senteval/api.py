@@ -6,6 +6,7 @@ import warnings
 import pandas as pd
 import numpy as np
 import torch
+import sklearn.base
 
 from . import train
 from . import assets
@@ -15,6 +16,7 @@ from . import cache
 
 __all__ = [
     "UlyssesSentEval",
+    "UlyssesSentEvalLazy",
 ]
 
 
@@ -34,6 +36,8 @@ class UlyssesSentEval:
         NOTE: The `sentence_model` is not copied, rather this class stores a reference to it. Thus, any
         changes in the model after this class instantiation will take effect.
 
+    Keyword-only parameters
+    -----------------------
     tasks : t.Sequence[str], str or "all", default="all"
         Sequence of strings or a single string specifying which tasks the `sentence_model` should be
         evaluated on.
@@ -71,16 +75,24 @@ class UlyssesSentEval:
 
     cache_dir : str, default="./cache"
         Directory to look for cached embeddings. Used only if `cache_embed_key` is not None.
+
+    disable_multiprocessing : bool, default=False
+        TODO
+
+    lazy_embedding : bool, default=False
+        TODO
     """
 
     def __init__(
         self,
         sentence_model: t.Any,
+        *,
         tasks: t.Union[str, t.Sequence[str]] = "all",
         data_dir_path: str = "./ulysses_senteval_datasets",
         cache_embed_key: t.Optional[str] = None,
         cache_dir: str = "./cache",
         disable_multiprocessing: bool = False,
+        lazy_embedding: bool = False,
     ):
         tasks = assets.TASKS if tasks == "all" else tasks
 
@@ -103,10 +115,24 @@ class UlyssesSentEval:
         self.sentence_model = sentence_model
         self.data_dir_path = utils.expand_path(data_dir_path)
         self.disable_multiprocessing = disable_multiprocessing
+        self.lazy_embedding = lazy_embedding
+
+        self._lazy_sentence_model = sentence_model if self.lazy_embedding else None
+
+        if cache_embed_key is not None and self.lazy_embedding:
+            warnings.warn("Ignoring 'cache_embed_key' since lazy_embedding=True.", UserWarning)
+            cache_embed_key = None
 
         self.cache_dir = os.path.join(utils.expand_path(cache_dir), cache_embed_key) if cache_embed_key is not None else None
 
-    def embed(self, X_a: t.List[str], X_b: t.Optional[t.List[str]], task: str, **kwargs: t.Any) -> utils.DataType:
+    def embed(
+        self,
+        X_a: t.List[str],
+        X_b: t.Optional[t.List[str]],
+        task: str,
+        data_split: str,
+        **kwargs: t.Any,
+    ) -> utils.EmbeddedDataType:
         """Embed task sentences using `self.sentence_model` (provided during initialization).
 
         This method embed (X_a, X_b) as (E_a, E_b, |E_a - E_b|, E_a * E_b) if X_b is not None, where
@@ -125,6 +151,11 @@ class UlyssesSentEval:
 
         task : str
             Task name. Can be used to embed data conditionally to the task.
+            Ignored by default; to use this, you must override this method (see ``Examples``).
+
+        data_split : {'all', 'train', 'eval', 'test'}
+            Data split being embedded.
+            Useful to properly embed data with a lazy algorithm (e.g. TF-IDF) without train-test contamination.
             Ignored by default; to use this, you must override this method (see ``Examples``).
 
         **kwargs : t.Any
@@ -148,7 +179,8 @@ class UlyssesSentEval:
         >>>               X_a: t.List[str],
         >>>               X_b: t.Optional[t.List[str]],
         >>>               task: str,
-        >>>               **kwargs: t.Any) -> utils.DataType:
+        >>>               data_split: str,
+        >>>               **kwargs: t.Any) -> utils.EmbeddedDataType:
         >>>         embs_a = self.sentence_model.encode(X_a, convert_to_tensor=True, **kwargs).cpu()
         >>>         if X_b is None:
         >>>             return embs_a
@@ -156,10 +188,23 @@ class UlyssesSentEval:
         >>>         return torch.hstack((embs_a, embs_b, torch.abs(embs_a - embs_b), embs_a * embs_b))
         """
         # pylint: disable='unused-argument'
+        assert data_split in {"all", "train", "eval", "test"}
+
+        if self.lazy_embedding:
+            warnings.warn(
+                "The default 'embed' method is inappropriate when lazy_embedding=True, since it does not "
+                "take into account the data split being embedded (train, eval, or test). Please provide "
+                f"your own 'embed' method by inheriting from '{self.__class__.__name__}'.",
+                UserWarning,
+            )
+
         embs_a = self.sentence_model.encode(X_a, convert_to_tensor=True, **kwargs).cpu()
+
         if X_b is None:
             return embs_a
+
         embs_b = self.sentence_model.encode(X_b, convert_to_tensor=True, **kwargs).cpu()
+
         # NOTE: standard output as per 'SentEval: An Evaluation Toolkit for Universal Sentence Representations'.
         return torch.hstack((embs_a, embs_b, torch.abs(embs_a - embs_b), embs_a * embs_b))
 
@@ -234,12 +279,15 @@ class UlyssesSentEval:
             local_files_only=False,
         )
 
-        embs: t.Optional[utils.DataType] = None
+        assert len(X_a) == len(y)
+        assert X_b is None or len(X_b) == len(y)
 
-        if not ignore_cached and self.cache_dir is not None:
+        embs: t.Optional[utils.EmbeddedDataType] = None
+
+        if not self.lazy_embedding and not ignore_cached and self.cache_dir is not None:
             embs = cache.load_from_cache(cache_dir=self.cache_dir, task=task)
 
-        if embs is None:
+        if not self.lazy_embedding and embs is None:
             force_main_process = False
             if not self.disable_multiprocessing:
                 # NOTE: creating a child process to embed data, since using CUDA in the main process
@@ -248,7 +296,7 @@ class UlyssesSentEval:
                 #            you must use the 'spawn' start method"
                 try:
                     with utils.disable_torch_multithreading(), torch.multiprocessing.Pool(1) as ppool:
-                        embs = ppool.apply(self.embed, args=(X_a, X_b, task), kwds=kwargs_embed)
+                        embs = ppool.apply(self.embed, args=(X_a, X_b, task, "all"), kwds=kwargs_embed)
 
                 except RuntimeError as err:
                     if utils.is_cuda_vs_multiprocessing_error(err):
@@ -262,17 +310,17 @@ class UlyssesSentEval:
                         force_main_process = True
 
             if force_main_process or self.disable_multiprocessing:
-                embs = self.embed(X_a, X_b, task=task, **kwargs_embed)
+                embs = self.embed(X_a, X_b, task=task, data_split="all", **kwargs_embed)
 
             embed_not_cached = True
 
         else:
             embed_not_cached = False
 
-        assert embs is not None
-        assert len(embs) == len(y)
+        assert self.lazy_embedding or embs is not None
+        assert self.lazy_embedding or len(embs) == len(y)
 
-        if self.cache_dir is not None and (embed_not_cached or ignore_cached):
+        if not self.lazy_embedding and self.cache_dir is not None and (embed_not_cached or ignore_cached):
             cache.save_in_cache(embs, cache_dir=self.cache_dir, task=task, overwrite=ignore_cached)
 
         eval_metric = assets.get_eval_metric(task=task, n_classes=n_classes)
@@ -284,12 +332,19 @@ class UlyssesSentEval:
         if self.disable_multiprocessing:
             extra_args["n_processes"] = 1
 
+        if self.lazy_embedding:
+            kwargs_embed = kwargs_embed or {}
+            kwargs_embed = kwargs_embed.copy()
+            kwargs_embed["task"] = task
+
         (aggregated_results, all_results) = train.kfold_train(
-            X=embs,
+            X=embs if not self.lazy_embedding else (X_a, X_b),
             y=y,
             n_classes=n_classes,
             eval_metric=eval_metric,
             pbar_desc=f"Task: {task:<4}",
+            lazy_embedder=self if self.lazy_embedding else None,
+            kwargs_embed=kwargs_embed if self.lazy_embedding else None,
             **kwargs_train,
             **extra_args,
         )
@@ -323,24 +378,27 @@ class UlyssesSentEval:
         kwargs_train : t.Optional[t.Dict[str, t.Any]], default=None
             Additional arguments for task classifier training.
 
-            WARNING: to compute results comparable to publish results, hyper-parameters should be kept
-            as their default value (with the exception of `n_processes`, since it doesn't affect results).
-
-            The following training hyper-parameters are available:
+            Computational configuration:
 
             - `n_processes`: (int, default=5)
                 Number of processes to compute cross validation repetitions.
                 If n_processes <= 1, will disable multiprocessing.
                 Selecting values higher than `n_repeats` will not speed up computations.
+            - `device`: (t.Union[torch.device, str], default="cuda:0")
+                Device to run training and validation.
+            - `show_progress_bar`: (bool, default=True)
+                If True, show progress bar.
+
+            The following training hyper-parameters are available:
+
+            WARNING: to compute results comparable to publish results, hyper-parameters should be kept
+            as their default value.
+
             - `batch_size`: (int, default=128)
                 Training and evaluation batch size.
             - `eval_frac`: (float, default=0.20)
                 Evaluation split fraction with respect to the train split size.
                 Evaluation instances are randomly sampled after class balancing.
-            - `device`: (t.Union[torch.device, str], default="cuda:0")
-                Device to run training and validation.
-            - `show_progress_bar`: (bool, default=True)
-                If True, show progress bar.
             - `n_repeats`: (int, default=10)
                 Number of cross validation repetitions.
                 For each repetition, all random number generators are reseeded, and classes are rebalanced.
@@ -414,3 +472,42 @@ class UlyssesSentEval:
             return (results_per_task, all_results)
 
         return results_per_task
+
+
+class UlyssesSentEvalLazy(UlyssesSentEval):
+    """TODO."""
+
+    def __init__(self, sentence_model: t.Any, **kwargs: t.Any):
+        super().__init__(sentence_model=sentence_model, **kwargs, lazy_embedding=True)
+
+    def embed(
+        self,
+        X_a: t.List[str],
+        X_b: t.Optional[t.List[str]],
+        task: str,
+        data_split: str,
+        **kwargs: t.Any,
+    ) -> utils.EmbeddedDataType:
+        """TODO."""
+        if data_split == "train":
+            # NOTE: cloning self.sentence_model is not strictly necessary, since we're fitting the new
+            #       model on top of any previously fitted values. Also, this model is cloned for each
+            #       partitioning of k-fold cross validation to avoid any contamination across cross
+            #       validation runs.
+            self._lazy_sentence_model = sklearn.base.clone(self.sentence_model)
+            self._lazy_sentence_model.fit(X_a if X_b is None else [*X_a, *X_b])
+
+        embs_a = self._lazy_sentence_model.transform(X_a)
+        embs_a = embs_a.astype(np.float32, copy=False)
+        embs_a = embs_a if isinstance(embs_a, np.ndarray) else embs_a.toarray()
+
+        if X_b is None:
+            return torch.from_numpy(embs_a).float()
+
+        embs_b = self._lazy_sentence_model.transform(X_b)
+        embs_b = embs_b.astype(np.float32, copy=False)
+        embs_b = embs_b if isinstance(embs_b, np.ndarray) else embs_b.toarray()
+
+        out = np.hstack((embs_a, embs_b, np.abs(embs_a - embs_b), embs_a * embs_b))
+        out = torch.from_numpy(out)
+        return out.float()

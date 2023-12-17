@@ -18,7 +18,7 @@ def load_from_cache(cache_dir: str, task: str) -> t.Optional[torch.Tensor]:
     return torch.load(cache_output_uri).float()
 
 
-def save_in_cache(embs: utils.DataType, cache_dir: str, task: str, overwrite: bool = False) -> None:
+def save_in_cache(embs: utils.EmbeddedDataType, cache_dir: str, task: str, overwrite: bool = False) -> None:
     """Cache embedding."""
     if isinstance(embs, np.ndarray):
         embs = torch.from_numpy(embs)

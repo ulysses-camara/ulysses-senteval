@@ -4,6 +4,7 @@ import collections
 import itertools
 import functools
 import warnings
+import copy
 
 import pandas as pd
 import numpy as np
@@ -11,6 +12,7 @@ import numpy.typing as npt
 import torch
 import torch.nn
 import sklearn.model_selection
+import scipy.stats
 import tqdm
 
 from . import utils
@@ -34,12 +36,14 @@ class LogisticRegression(torch.nn.Module):
         return self.params(X)
 
 
-def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tuple[utils.DataType, utils.DataType]:
+def undersample(
+    X: t.Union[utils.EmbeddedDataType, utils.PairedRawDataType], y: utils.EmbeddedDataType, random_state: int
+) -> t.Tuple[utils.EmbeddedDataType, utils.EmbeddedDataType]:
     """Undersample majority classes to match the minority class frequency.
 
     Parameters
     ----------
-    X : npt.NDArray[np.float64] of shape (N, M)
+    X : npt.NDArray[np.float64] of shape (N, M) or utils.PairedRawDataType
         Original embeddings.
 
     y : npt.NDArray of shape (N,)
@@ -66,7 +70,15 @@ def undersample(X: utils.DataType, y: utils.DataType, random_state: int) -> t.Tu
         cur_inds = rng.choice(cur_inds, size=freq_min, replace=False)
         sampled_inds[i * freq_min : (i + 1) * freq_min] = cur_inds
 
-    X = X[sampled_inds, :]
+    if torch.is_tensor(X):
+        X = X[sampled_inds, :]
+
+    else:
+        (X_a, X_b) = X
+        X_a = [X_a[i] for i in sampled_inds]
+        X_b = [X_b[i] for i in sampled_inds] if X_b is not None else None
+        X = (X_a, X_b)
+
     y = y[sampled_inds]
 
     return (X, y)
@@ -270,8 +282,31 @@ def scale_data(
     return (X_train, X_eval, X_test)
 
 
-def _summarize_metrics(all_results: t.Dict[str, t.Any], k_fold: int) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
+def avg_ci_with_bootstrap(vals: npt.NDArray[np.float64], random_state: int) -> t.Tuple[float, float]:
+    """Estimate confidence intervals for the average of `vals` using empirical bootstrap."""
+    if vals.size == 1:
+        return (float(vals.values), float(vals.values))
+
+    global_mean = float(np.mean(vals))
+
+    (diff_low, diff_high) = scipy.stats.bootstrap(
+        data=np.atleast_2d(vals),
+        statistic=lambda x: global_mean - float(np.mean(x)),
+        n_resamples=int(10**4),
+        confidence_level=0.99,
+        random_state=random_state,
+    ).confidence_interval
+
+    return (global_mean + diff_low, global_mean + diff_high)
+
+
+def _summarize_metrics(
+    all_results: t.Dict[str, t.Any], k_fold: int, random_state: int
+) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
     """Summarize metrics collected from training."""
+    seeder = np.random.RandomState(random_state)
+    rng_seeds_per_key = {k: seeder.randint(0, utils.MAX_RNG_SEED) for k in sorted(all_results.keys())}
+
     output: t.Dict[str, t.Any] = {}
     all_dfs: t.List[pd.DataFrame] = []
 
@@ -291,15 +326,7 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any], k_fold: int) -> t.Tuple[
                 }
             )
 
-            avg_per_epoch, std_per_epoch = df_stat_per_epoch.groupby("train_epoch")[k].agg(("mean", "std")).values.T
-
-            output[f"avg_{k}"] = avg_per_epoch
-            output[f"std_{k}"] = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
-
         else:
-            output[f"avg_{k}"] = float(np.mean(v))
-            output[f"std_{k}"] = float(np.std(v, ddof=1))
-
             df_stat_per_epoch = pd.DataFrame(
                 {
                     "kfold_repetition": 1 + (np.arange(len(v)) // k_fold),
@@ -308,6 +335,24 @@ def _summarize_metrics(all_results: t.Dict[str, t.Any], k_fold: int) -> t.Tuple[
                     k: v,
                 }
             )
+
+        avg_ci_with_bootstrap_ = functools.partial(avg_ci_with_bootstrap, random_state=rng_seeds_per_key[k])
+
+        (avg_per_epoch, std_per_epoch, conf_int_per_epoch) = (
+            df_stat_per_epoch.groupby("train_epoch")[k].agg(("mean", "std", avg_ci_with_bootstrap_)).values
+        ).T
+
+        std_per_epoch = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
+
+        # TODO: store confidence intervals.
+        print(conf_int_per_epoch)
+
+        if avg_per_epoch.size == 1:
+            avg_per_epoch = float(avg_per_epoch)
+            std_per_epoch = float(std_per_epoch)
+
+        output[f"avg_{k}"] = avg_per_epoch
+        output[f"std_{k}"] = std_per_epoch
 
         df_stat_per_epoch = df_stat_per_epoch.melt(
             id_vars=["kfold_repetition", "kfold_partition", "train_epoch"],
@@ -327,7 +372,7 @@ def _single_kfold(
     repetition_id: int,
     random_state: int,
     *,
-    X: torch.Tensor,
+    X: t.Union[torch.Tensor, utils.PairedRawDataType],
     y: torch.Tensor,
     n_classes: int,
     eval_metric: utils.MetricType,
@@ -341,11 +386,15 @@ def _single_kfold(
     early_stopping_rel_improv: float,
     pbar_desc: t.Optional[str],
     pbar: t.Optional[tqdm.tqdm] = None,
+    lazy_embedder: t.Optional[t.Any] = None,
+    kwargs_embed: t.Optional[t.Dict[str, t.Any]] = None,
 ):
     """Perform single k-fold cross validation; isolated to support multiprocessing."""
     reseeder = np.random.RandomState(random_state)
-    (seed_undersampling, seed_kfold) = reseeder.randint(0, 2**32 - 1, size=2)
-    (seeds_param_init, seeds_dl) = reseeder.randint(0, 2**32 - 1, size=(2, k_fold))
+    (seed_undersampling, seed_kfold) = reseeder.randint(0, utils.MAX_RNG_SEED, size=2)
+    (seeds_param_init, seeds_dl) = reseeder.randint(0, utils.MAX_RNG_SEED, size=(2, k_fold))
+
+    do_lazy_embedding = not torch.is_tensor(X)
 
     (X_cur, y_cur) = undersample(X, y, random_state=seed_undersampling)
 
@@ -361,19 +410,36 @@ def _single_kfold(
             desc=f"{pbar_desc} - rep: {repetition_id + 1:<2}",
             disable=not show_progress_bar,
             unit="partition",
-            leave=False,
+            leave=True,
             position=repetition_id,
         )
 
     all_results = collections.defaultdict(list)
 
-    for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur, y_cur)):
+    for j, (inds_train_eval, inds_test) in enumerate(splitter.split(X_cur if not do_lazy_embedding else X_cur[0], y_cur)):
         eval_size = int(np.ceil(eval_frac * inds_train_eval.size))
         reseeder.shuffle(inds_train_eval)
         (inds_train, inds_eval) = (inds_train_eval[eval_size:], inds_train_eval[:eval_size])
 
-        (X_train, X_eval, X_test) = (X_cur[inds_train, :], X_cur[inds_eval, :], X_cur[inds_test, :])
+        # NOTE: can't index X_* directly here, since it can be either a tensor or a tuple of lists.
+        (X_train, X_eval, X_test) = (
+            utils.take_inds(X_cur, inds_train, paired=do_lazy_embedding),
+            utils.take_inds(X_cur, inds_eval, paired=do_lazy_embedding),
+            utils.take_inds(X_cur, inds_test, paired=do_lazy_embedding),
+        )
+
         (y_train, y_eval, y_test) = (y_cur[inds_train], y_cur[inds_eval], y_cur[inds_test])
+
+        if do_lazy_embedding:
+            assert len(X_train) == len(X_eval) == len(X_test) == 2
+
+            # NOTE: copying 'lazy_embedder' to prevent any kind of embedding contamination
+            #       across cross validation runs.
+            lazy_embedder_copy = copy.deepcopy(lazy_embedder)
+
+            X_train = lazy_embedder_copy.embed(*X_train, **kwargs_embed, data_split="train")
+            X_eval = lazy_embedder_copy.embed(*X_eval, **kwargs_embed, data_split="eval")
+            X_test = lazy_embedder_copy.embed(*X_test, **kwargs_embed, data_split="test")
 
         assert len(X_train) == len(y_train)
         assert len(X_eval) == len(y_eval)
@@ -439,8 +505,8 @@ def _single_kfold(
 
 
 def kfold_train(
-    X: utils.DataType,
-    y: utils.DataType,
+    X: t.Union[utils.EmbeddedDataType, utils.PairedRawDataType],
+    y: utils.EmbeddedDataType,
     n_classes: int,
     eval_metric: utils.MetricType,
     *,
@@ -456,6 +522,8 @@ def kfold_train(
     early_stopping_rel_improv: float = 0.0025,
     random_state: int = 9847706,
     pbar_desc: t.Optional[str] = None,
+    lazy_embedder: t.Optional[t.Any] = None,
+    kwargs_embed: t.Optional[t.Dict[str, t.Any]] = None,
 ) -> t.Tuple[t.Dict[str, t.Any], pd.DataFrame]:
     """Apply repeated 5-fold cross validation in the provided data.
 
@@ -463,10 +531,10 @@ def kfold_train(
 
     Parameters
     ----------
-    X : utils.DataType of shape (N, M)
+    X : utils.EmbeddedDataType of shape (N, M) or utils.PairedRawDataType
         Data embeddings.
 
-    y : utils.DataType of shape (N,)
+    y : utils.EmbeddedDataType of shape (N,)
         Target labels.
 
     n_classes : int
@@ -520,6 +588,13 @@ def kfold_train(
     pbar_desc : t.Optional[str], default=None
         Progress bar description. Only used in `show_progress_bar=True`.
 
+    lazy_embedder : t.Optional[t.Any], default=None
+        TODO.
+
+    kwargs_embed : t.Optional[t.Dict[str, t.Any]], default=None
+        Additional arguments for embedding. These are passed directly to `embed` method.
+        Used only if X has not been embedded yet, i.e., in the form of a tuple of raw data (X_a, X_b).
+
     Returns
     -------
     output : t.Dict[str, t.Any]
@@ -533,8 +608,11 @@ def kfold_train(
     if isinstance(y, np.ndarray):
         y = torch.from_numpy(y)
 
-    X.share_memory_()
-    y.share_memory_()
+    if torch.is_tensor(X):
+        X.share_memory_()
+
+    if torch.is_tensor(y):
+        y.share_memory_()
 
     all_results = collections.defaultdict(list)
 
@@ -553,10 +631,12 @@ def kfold_train(
         tenacity=tenacity,
         early_stopping_rel_improv=early_stopping_rel_improv,
         pbar_desc=pbar_desc,
+        lazy_embedder=lazy_embedder,
+        kwargs_embed=kwargs_embed,
     )
 
     repetition_ids = np.arange(n_repeats)
-    repetition_seeds = reseeder.randint(0, 2**32 - 1, size=n_repeats)
+    repetition_seeds = reseeder.randint(0, utils.MAX_RNG_SEED, size=n_repeats)
     args = list(zip(repetition_ids, repetition_seeds))
     n_processes = min(n_repeats, n_processes)
 
@@ -585,7 +665,7 @@ def kfold_train(
             desc=pbar_desc,
             disable=not show_progress_bar,
             unit="partition",
-            leave=False,
+            leave=True,
         )
 
         for rep_id, rep_random_state in args:
@@ -593,6 +673,7 @@ def kfold_train(
             for k, v in cur_res.items():
                 all_results[k].extend(v)
 
-    (aggregated_results, all_results) = _summarize_metrics(all_results, k_fold=k_fold)
+    boostrap_seed = reseeder.randint(0, utils.MAX_RNG_SEED)
+    (aggregated_results, all_results) = _summarize_metrics(all_results, k_fold=k_fold, random_state=boostrap_seed)
 
     return (aggregated_results, all_results)

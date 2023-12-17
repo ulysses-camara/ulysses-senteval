@@ -8,7 +8,12 @@ import numpy.typing as npt
 import torch
 
 
-DataType = t.Union[torch.Tensor, npt.NDArray[np.float64]]
+MAX_RNG_SEED = 2**32 - 1
+
+
+EmbeddedDataType = t.Union[torch.Tensor, npt.NDArray[np.float64]]
+RawDataType = t.List[str]
+PairedRawDataType = t.Tuple[RawDataType, t.Optional[RawDataType]]
 MetricType = t.Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
@@ -54,3 +59,19 @@ def disable_torch_multithreading():
 
     finally:
         torch.set_num_threads(n_threads)
+
+
+def take_inds(iterable: t.Sequence[t.Any], inds: t.Sequence[int], paired: bool = False) -> t.Sequence[t.Any]:
+    """TODO"""
+    if paired:
+        (it_a, it_b) = iterable
+        return (
+            take_inds(it_a, inds, paired=False),
+            take_inds(it_b, inds, paired=False) if it_b is not None else None,
+        )
+
+    if isinstance(iterable, np.ndarray) or torch.is_tensor(iterable):
+        return iterable[inds]
+
+    cast_fn = type(iterable)
+    return cast_fn([iterable[i] for i in inds])
