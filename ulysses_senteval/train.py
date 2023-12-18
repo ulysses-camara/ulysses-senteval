@@ -449,7 +449,7 @@ def _single_kfold(
         assert len(X_train) == len(y_train)
         assert len(X_eval) == len(y_eval)
         assert len(X_test) == len(y_test)
-        assert len(X_train) >= max(len(X_eval), len(X_test))
+        assert (len(X_train) + len(X_eval)) >= len(X_test)
 
         (X_train, X_eval, X_test) = scale_data(X_train, X_eval, X_test)
 
