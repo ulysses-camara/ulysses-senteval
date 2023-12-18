@@ -145,14 +145,16 @@ class MetricCalibrator:
         self.min = float(min_value)
         self.max = float(max_value)
 
-    def __getattr__(self, attr: str) -> t.Any:
-        return getattr(self.__getattribute__("fn_metric"), attr)
+    def to(self, device: t.Union[str, torch.device]) -> t.Any:
+        self.fn_metric.to(device)
+        return self
 
     def __call__(self, *args: t.Any, **kwargs: t.Any) -> torch.Tensor:
         # pylint: disable='missing-function-docstring'
         metric_val = self.fn_metric(*args, **kwargs)
         metric_val = (metric_val - self.min) / (self.max - self.min)
-        metric_val = (torch.maximum if torch.is_tensor(metric_val) else max)(0, metric_val)
+        zero_singleton = torch.zeros(1).to(metric_val.device)
+        metric_val = (torch.maximum if torch.is_tensor(metric_val) else max)(zero_singleton, metric_val)
         return metric_val
 
 
