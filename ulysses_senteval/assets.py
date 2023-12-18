@@ -136,17 +136,33 @@ def load_dataset(
     return (X_a, X_b), y, n_classes
 
 
-class NormalizedBinaryMatthewsCorrCoef(torchmetrics.classification.BinaryMatthewsCorrCoef):
-    """Matthews Correlation Coefficient normalized to [0, 1] range."""
+class MetricCalibrator:
+    """Calibrate metric value to g(x) = max(0, (f(x) - min)/(max - min)) co-domain."""
+    def __init__(self, fn_metric: utils.MetricType, min_value: float, max_value: float):
+        self.fn_metric = fn_metric
+        if min_value >= max_value:
+            raise ValueError("Metric minimum value must be < maximum value.")
+        self.min = float(min_value)
+        self.max = float(max_value)
+
+    def __getattr__(self, attr: str) -> t.Any:
+        return getattr(self.__getattribute__("fn_metric"), attr)
 
     def __call__(self, *args: t.Any, **kwargs: t.Any) -> torch.Tensor:
         # pylint: disable='missing-function-docstring'
-        return 0.5 * (1.0 + super().__call__(*args, **kwargs))
+        metric_val = self.fn_metric(*args, **kwargs)
+        metric_val = (metric_val - self.min) / (self.max - self.min)
+        metric_val = (torch.maximum if torch.is_tensor(metric_val) else max)(0, metric_val)
+        return metric_val
 
 
-def get_eval_metric(task: str, n_classes: int):
+def get_eval_metric(task: str, n_classes: int) -> utils.MetricType:
     """Get evaluation metric for `task`."""
     if task in {"F2"}:
-        return torchmetrics.classification.F1Score(num_classes=n_classes, average="macro", task="multiclass")
+        fn_metric = torchmetrics.classification.F1Score(num_classes=n_classes, average="macro", task="multiclass")
+        min_value = 1.0 / n_classes
+    else:
+        fn_metric = torchmetrics.classification.BinaryMatthewsCorrCoef()
+        min_value = 0.0
 
-    return NormalizedBinaryMatthewsCorrCoef()
+    return MetricCalibrator(fn_metric, max_value=1.0, min_value=min_value)
