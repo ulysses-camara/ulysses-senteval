@@ -339,21 +339,25 @@ def _summarize_metrics(
 
         avg_ci_with_bootstrap_ = functools.partial(avg_ci_with_bootstrap, random_state=rng_seeds_per_key[k])
 
-        (avg_per_epoch, std_per_epoch, conf_int_per_epoch) = (
+        (avg_per_epoch, std_per_epoch, ci_per_epoch) = (
             df_stat_per_epoch.groupby("train_epoch")[k].agg(("mean", "std", avg_ci_with_bootstrap_)).values
         ).T
 
         std_per_epoch = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
 
-        # TODO: store confidence intervals.
-        print(conf_int_per_epoch)
+        ci_per_epoch = np.vstack(ci_per_epoch)
+        (ci_low, ci_high) = ci_per_epoch.T
 
         if avg_per_epoch.size == 1:
             avg_per_epoch = float(avg_per_epoch)
             std_per_epoch = float(std_per_epoch)
+            ci_low = float(ci_low.squeeze())
+            ci_high = float(ci_high.squeeze())
 
         output[f"avg_{k}"] = avg_per_epoch
         output[f"std_{k}"] = std_per_epoch
+        output[f"ci99_low_{k}"] = ci_low
+        output[f"ci99_high_{k}"] = ci_high
 
         df_stat_per_epoch = df_stat_per_epoch.melt(
             id_vars=["kfold_repetition", "kfold_partition", "train_epoch"],
