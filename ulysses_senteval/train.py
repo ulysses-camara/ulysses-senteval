@@ -236,6 +236,7 @@ def train(
             y_preds = classifier(X_batch)
             loss_train = loss_fn(y_preds, y_batch)
             loss_train.backward()
+            torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
             optim.step()
             warmup_scheduler.step()
 
