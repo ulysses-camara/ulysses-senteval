@@ -387,6 +387,10 @@ def kfold_train(
     X : utils.EmbeddedDataType of shape (N, M) or utils.PairedRawDataType
         Data embeddings.
 
+        If (X_a, X_b) tuple, will embed data every `n_repeats * k_fold` repetition. This is adequate for
+        lazy embedders, that must take different actions based on train-eval-test splits. In this case,
+        you must provide `lazy_embedder` too.
+
     y : utils.EmbeddedDataType of shape (N,)
         Target labels.
 
@@ -442,7 +446,8 @@ def kfold_train(
         Progress bar description. Only used in `show_progress_bar=True`.
 
     lazy_embedder : t.Optional[t.Any], default=None
-        TODO.
+        Embedder instance (e.g., UlyssesSentEval instance).
+        Used only if X has not been embeded yet (is in the form (X_a, X_b) tuple).
 
     kwargs_embed : t.Optional[t.Dict[str, t.Any]], default=None
         Additional arguments for embedding. These are passed directly to `embed` method.

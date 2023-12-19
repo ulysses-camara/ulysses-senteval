@@ -62,7 +62,10 @@ def disable_torch_multithreading():
 
 
 def take_inds(iterable: t.Sequence[t.Any], inds: t.Sequence[int], paired: bool = False) -> t.Sequence[t.Any]:
-    """TODO"""
+    """Take `inds` from the first axis of `iterable`.
+
+    If paired, will take `inds` from both sequences.
+    """
     if paired:
         (it_a, it_b) = iterable
         return (

@@ -77,10 +77,19 @@ class UlyssesSentEval:
         Directory to look for cached embeddings. Used only if `cache_embed_key` is not None.
 
     disable_multiprocessing : bool, default=False
-        TODO
+        If True, evaluate embedding model using just the main process.
+        Note that this parameter prevents only this package creating multiprocesses; external multiprocessing
+        sources (e.g., custom embedding scheme) must be handled by the user.
 
     lazy_embedding : bool, default=False
-        TODO
+        If True, data is embedded only after k-fold train-eval-test split. This means that, given a
+
+        Enabling this option automatically disables embed caching.
+
+        N x k-fold repeated cross-validation involves embedding the data N * k times, which can be computationally
+        expensive. However, this setup is mandatory to prevent train-evaluation contamination for dynamically
+        constructed models, such as TF-IDF models. If this is your case, we recommend using the UlyssesSentEvalLazy
+        class instead, which comes with an adapted embed method compatible with the scikit-learn API.
     """
 
     def __init__(
@@ -475,7 +484,14 @@ class UlyssesSentEval:
 
 
 class UlyssesSentEvalLazy(UlyssesSentEval):
-    """TODO."""
+    """Ulysses SentEval adapted for lazy embedding models.
+
+    If you are using a lazy embedder, like TF-IDF models, you should use this class instead of the
+    regular UlyssesSentEval.
+
+    This class API follows the UlyssesSentEval API, except it enforces lazy_embedding=True, and also
+    the embedding method is adapted to the scikit-learn API.
+    """
 
     def __init__(self, sentence_model: t.Any, **kwargs: t.Any):
         super().__init__(sentence_model=sentence_model, **kwargs, lazy_embedding=True)
