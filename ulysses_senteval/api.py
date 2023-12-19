@@ -488,7 +488,14 @@ class UlyssesSentEvalLazy(UlyssesSentEval):
         data_split: str,
         **kwargs: t.Any,
     ) -> utils.EmbeddedDataType:
-        """TODO."""
+        """Embed data taking into consideration different `data_split`.
+        """
+        if data_split == "all":
+            raise ValueError(
+                "You can not embed all data at once using a lazy embedder. Please call 'embed' passing "
+                "'data_split=train' and 'data_split=test' separately (and, optionally, 'data_split=eval')."
+            )
+
         if data_split == "train":
             # NOTE: cloning self.sentence_model is not strictly necessary, since we're fitting the new
             #       model on top of any previously fitted values. Also, this model is cloned for each
