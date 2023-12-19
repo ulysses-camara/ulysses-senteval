@@ -246,6 +246,7 @@ def _single_kfold(
     reseeder = np.random.RandomState(random_state)
     (seed_undersampling, seed_kfold) = reseeder.randint(0, utils.MAX_RNG_SEED, size=2)
     (seeds_param_init, seeds_dl) = reseeder.randint(0, utils.MAX_RNG_SEED, size=(2, k_fold))
+    pbar_random_delay = 1.0 + reseeder.random()
 
     do_lazy_embedding = not torch.is_tensor(X)
 
@@ -265,6 +266,7 @@ def _single_kfold(
             unit="partition",
             leave=True,
             position=repetition_id,
+            delay=pbar_random_delay,
         )
 
     all_results = collections.defaultdict(list)

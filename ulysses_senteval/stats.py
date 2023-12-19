@@ -128,14 +128,13 @@ def summarize_metrics(
                 }
             )
 
-        avg_ci_with_bootstrap_ = functools.partial(avg_ci_with_bootstrap, random_state=rng_seeds_per_key[k])
+        metric_grouped_by_epoch = df_stat_per_epoch.groupby("train_epoch")[k]
 
-        (avg_per_epoch, std_per_epoch, ci_per_epoch) = (
-            df_stat_per_epoch.groupby("train_epoch")[k].agg(("mean", "std", avg_ci_with_bootstrap_)).values
-        ).T
-
+        (avg_per_epoch, std_per_epoch) = metric_grouped_by_epoch.agg(("mean", "std")).values.T
         std_per_epoch = np.nan_to_num(std_per_epoch, nan=0.0, copy=False)
 
+        avg_ci_with_bootstrap_ = functools.partial(avg_ci_with_bootstrap, random_state=rng_seeds_per_key[k])
+        ci_per_epoch = metric_grouped_by_epoch.agg(avg_ci_with_bootstrap_).values
         ci_per_epoch = np.vstack(ci_per_epoch)
         (ci_low, ci_high) = ci_per_epoch.T
 
