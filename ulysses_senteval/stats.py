@@ -30,7 +30,7 @@ def undersample(
     X_undersampled : npt.NDArray[np.float64] of shape (K, M)
         Undersampled X, where K <= N.
 
-    y_undersampled : npt.NDArray os shape(K,
+    y_undersampled : npt.NDArray of shape(K,)
         Undersampled y, where K <= N.
     """
     rng = np.random.RandomState(random_state)
