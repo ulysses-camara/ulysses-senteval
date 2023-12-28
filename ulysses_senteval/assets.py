@@ -27,7 +27,7 @@ TASK_CODE_TO_NAME = {
     "F3": "oab_first_part.csv",
     "F4": "oab_second_part.csv",
     "F5": "trf_examinations.csv",
-    "G1": "speech_summaries.csv",
+    "G1": "bill_summary_to_topics.csv",
     "G2A": "sts_state_news.csv",
     "G2B": "summary_vs_bill.csv",
     "G3": "faqs.csv",
