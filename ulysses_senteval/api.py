@@ -318,6 +318,9 @@ class UlyssesSentEval:
                         )
                         force_main_process = True
 
+                    else:
+                        raise err
+
             if force_main_process or self.disable_multiprocessing:
                 embs = self.embed(X_a, X_b, task=task, data_split="all", **kwargs_embed)
 
