@@ -160,7 +160,7 @@ class MetricCalibrator:
 
 def get_eval_metric(task: str, n_classes: int) -> utils.MetricType:
     """Get evaluation metric for `task`."""
-    if task in {"F2"}:
+    if task in {"F2", "F3", "F5"}:
         fn_metric = torchmetrics.classification.F1Score(num_classes=n_classes, average="macro", task="multiclass")
         min_value = 1.0 / n_classes
     else:

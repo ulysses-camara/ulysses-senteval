@@ -2,6 +2,7 @@
 import typing as t
 import os
 import warnings
+import itertools
 
 import pandas as pd
 import numpy as np
@@ -211,6 +212,12 @@ class UlyssesSentEval:
 
         if X_b is None:
             return embs_a
+
+        if task in {"F3", "F5"}:
+            X_b = list(itertools.chain(*[x_b.split(" [SEP] ") for x_b in X_b]))
+            embs_b = self.sentence_model.encode(X_b, convert_to_tensor=True, **kwargs).cpu()
+            embs_b = embs_b.reshape(len(embs_a), -1)
+            return torch.hstack((embs_a, embs_b))
 
         embs_b = self.sentence_model.encode(X_b, convert_to_tensor=True, **kwargs).cpu()
 
