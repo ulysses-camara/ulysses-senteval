@@ -27,6 +27,7 @@ TASK_CODE_TO_NAME = {
     "F3": "oab_first_part.csv",
     "F4": "oab_second_part.csv",
     "F5": "trf_examinations.csv",
+    "F6": "stj_summary.csv",
     "G1": "bill_summary_to_topics.csv",
     "G2A": "sts_state_news.csv",
     "G2B": "summary_vs_bill.csv",
@@ -37,6 +38,7 @@ TASK_CODE_TO_NAME = {
     "T2A": "factnews_news_bias.csv",
     "T2B": "factnews_news_factuality.csv",
     "T3": "fakebr_size_normalized.csv",
+    "T4": "tampered_leg.csv",
 }
 
 TASKS = tuple(TASK_CODE_TO_NAME.keys())

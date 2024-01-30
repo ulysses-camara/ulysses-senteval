@@ -53,6 +53,7 @@ class UlyssesSentEval:
             - "F3": "oab_first_part.csv"
             - "F4": "oab_second_part.csv"
             - "F5": "trf_examinations.csv"
+            - "F6": "stj_summary.csv"
             - "G1": "bill_summary_to_topics.csv"
             - "G2A": "sts_state_news.csv"
             - "G2B": "summary_vs_bill.csv"
@@ -63,6 +64,7 @@ class UlyssesSentEval:
             - "T2A": "factnews_news_bias.csv"
             - "T2B": "factnews_news_factuality.csv"
             - "T3": "fakebr_size_normalized.csv"
+            - "T4": "tampered_leg.csv"
 
     data_dir_path : str, default="./ulysses_senteval_datasets"
         Ulysses SentEval dataset directory path. If not found, will download data in the specified
