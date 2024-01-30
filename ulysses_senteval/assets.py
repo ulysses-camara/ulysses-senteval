@@ -140,6 +140,7 @@ def load_dataset(
 
 class MetricCalibrator:
     """Calibrate metric value to g(x) = max(0, (f(x) - min)/(max - min)) co-domain."""
+
     def __init__(self, fn_metric: utils.MetricType, min_value: float, max_value: float):
         self.fn_metric = fn_metric
         if min_value >= max_value:

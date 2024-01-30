@@ -30,10 +30,7 @@ class FeedForwardClassifier(torch.nn.Module):
         dims = [input_dim, *hidden_dims, output_dim]
 
         self.params = torch.nn.Sequential(
-            *[
-                self._build_layer_block(dims[i], dims[i + 1])
-                for i in range(len(dims) - 2)
-            ],
+            *[self._build_layer_block(dims[i], dims[i + 1]) for i in range(len(dims) - 2)],
             torch.nn.Linear(dims[-2], dims[-1], bias=True),
             torch.nn.Flatten(start_dim=0) if output_dim == 1 else torch.nn.Identity(),
         )

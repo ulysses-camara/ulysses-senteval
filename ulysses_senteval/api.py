@@ -523,8 +523,7 @@ class UlyssesSentEvalLazy(UlyssesSentEval):
         data_split: str,
         **kwargs: t.Any,
     ) -> utils.EmbeddedDataType:
-        """Embed data taking into consideration different `data_split`.
-        """
+        """Embed data taking into consideration different `data_split`."""
         if data_split == "all":
             raise ValueError(
                 "You can not embed all data at once using a lazy embedder. Please call 'embed' passing "
