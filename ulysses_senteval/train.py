@@ -18,22 +18,40 @@ from . import utils
 from . import stats
 
 
-class LogisticRegression(torch.nn.Module):
-    """Logistic regression module."""
+class FeedForwardClassifier(torch.nn.Module):
+    """Standard feed-forward classifier module."""
 
     # pylint: disable='missing-method-docstring'
 
-    def __init__(self, input_dim: int, output_dim: int):
+    def __init__(self, input_dim: int, hidden_dims: t.List[int], output_dim: int):
         super().__init__()
+
+        hidden_dims = hidden_dims or []
+        dims = [input_dim, *hidden_dims, output_dim]
+
         self.params = torch.nn.Sequential(
-            torch.nn.Linear(input_dim, output_dim, bias=True),
+            *[
+                self._build_layer_block(dims[i], dims[i + 1])
+                for i in range(len(dims) - 2)
+            ],
+            torch.nn.Linear(dims[-2], dims[-1], bias=True),
             torch.nn.Flatten(start_dim=0) if output_dim == 1 else torch.nn.Identity(),
         )
 
-        torch.nn.init.constant_(self.params[0].bias, 0.0)
+        torch.nn.init.constant_(self.params[-2].bias, 0.0)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         return self.params(X)
+
+    @staticmethod
+    def _build_layer_block(input_dim: int, output_dim: int) -> torch.nn.Module:
+        layer_block = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, output_dim, bias=False),
+            torch.nn.BatchNorm1d(output_dim),
+            torch.nn.ReLU(inplace=True),
+        )
+        torch.nn.init.constant_(layer_block[1].bias, 0.0)
+        return layer_block
 
 
 def tune_optim_hyperparameters(
@@ -71,6 +89,7 @@ def train(
     dl_eval: t.Optional[torch.utils.data.DataLoader],
     dl_test: t.Optional[torch.utils.data.DataLoader],
     adamw_optim_kwargs: t.Dict[str, t.Any],
+    hidden_dims: t.Optional[t.List[int]],
     n_classes: int,
     eval_metric: utils.MetricType,
     n_epochs: int,
@@ -94,6 +113,11 @@ def train(
 
     adamw_optim_kwargs : t.Dict[str, t.Any]
         Arguments for AdamW optimizer.
+
+    hidden_dims : t.Optional[t.List[int]]
+        Hidden dimensions of the feed-forward classifier.
+        If None (or empty), the resulting classifier will be a Logistic Regression.
+        Each hidden layer has batch normalization and ReLU activation.
 
     n_classes : int
         Number of classes.
@@ -136,8 +160,9 @@ def train(
     with torch.random.fork_rng(devices=["cpu"]):
         torch.random.manual_seed(param_init_random_state)
 
-        classifier = LogisticRegression(
+        classifier = FeedForwardClassifier(
             input_dim=input_dim,
+            hidden_dims=hidden_dims or [],
             output_dim=1 if is_binary_classification else n_classes,
         )
 
@@ -227,6 +252,7 @@ def _single_kfold(
     *,
     X: t.Union[torch.Tensor, utils.PairedRawDataType],
     y: torch.Tensor,
+    hidden_dims: t.Optional[t.List[int]],
     n_classes: int,
     eval_metric: utils.MetricType,
     batch_size: int,
@@ -332,6 +358,7 @@ def _single_kfold(
             "eval_metric": eval_metric,
             "device": device,
             "param_init_random_state": seeds_param_init[j],
+            "hidden_dims": hidden_dims,
         }
 
         adamw_optim_kwargs = tune_optim_hyperparameters(
@@ -367,6 +394,7 @@ def kfold_train(
     *,
     n_processes: int = 5,
     batch_size: int = 128,
+    hidden_dims: t.Optional[t.List[int]] = None,
     eval_frac: float = 0.20,
     device: t.Union[torch.device, str] = "cuda:0",
     show_progress_bar: bool = True,
@@ -412,6 +440,11 @@ def kfold_train(
 
     batch_size : int, default=128
         Training and evaluation batch size.
+
+    hidden_dims : t.Optional[t.List[int]], default=None
+        Hidden dimensions of the feed-forward classifier.
+        If None (or empty), the resulting classifier will be a Logistic Regression.
+        Each hidden layer has batch normalization and ReLU activation.
 
     eval_frac : float, default=0.20
         Evaluation split fraction with respect to the train split size.
@@ -483,6 +516,7 @@ def kfold_train(
         n_classes=n_classes,
         eval_metric=eval_metric,
         batch_size=batch_size,
+        hidden_dims=hidden_dims,
         eval_frac=eval_frac,
         device=device,
         show_progress_bar=show_progress_bar,

@@ -349,6 +349,9 @@ class UlyssesSentEval:
             kwargs_embed = kwargs_embed.copy()
             kwargs_embed["task"] = task
 
+        if task in {"F3", "F5"}:
+            kwargs_train.setdefault("hidden_dims", [256])
+
         (aggregated_results, all_results) = train.kfold_train(
             X=embs if not self.lazy_embedding else (X_a, X_b),
             y=y,
@@ -408,6 +411,10 @@ class UlyssesSentEval:
 
             - `batch_size`: (int, default=128)
                 Training and evaluation batch size.
+            - `hidden_dims` : (t.Optional[t.List[int]], default=None)
+                Hidden dimensions of the feed-forward classifier.
+                If None (or empty), the resulting classifier will be a Logistic Regression.
+                Each hidden layer has batch normalization and ReLU activation.
             - `eval_frac`: (float, default=0.20)
                 Evaluation split fraction with respect to the train split size.
                 Evaluation instances are randomly sampled after class balancing.
