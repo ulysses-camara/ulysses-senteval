@@ -1,6 +1,8 @@
 # Ulysses SentEval: evaluation of sentence embeddings in Brazilian legal domain
 WIP.
 
+![Diagram of all Ulysses SentEval tasks.](./assets/ulysses_senteval_tasks_v0.drawio.png)
+
 1. [Installation](#installation)
 2. [Task list](#task-list)
 3. [Evaluation specifications](#evaluation-specifications)
