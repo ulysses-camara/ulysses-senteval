@@ -71,12 +71,24 @@ def download_dataset(task: str, data_dir_path: str, force_download: bool = False
     None
     """
     input_uri = _build_data_path(task=task, data_dir_path=data_dir_path)
+    dataset_name = TASK_CODE_TO_NAME[task]
 
     if not force_download and os.path.exists(input_uri):
         return
 
-    # TODO: download data from Fetcher.
-    raise NotImplementedError("Dataset download still not implemented; only local files can be used.")
+    has_succeed = buscador.download_resource(
+        task_name="sentence_model_evaluation",
+        resource_name=dataset_name.removesuffix(".csv"),
+        output_dir=data_dir_path,
+        show_progress_bar=True,
+        check_cached=True,
+        clean_compressed_files=True,
+        check_resource_hash=True,
+        timeout_limit_seconds=120,
+    )
+
+    if not has_succeed:
+        raise RuntimeError(f"Could not donwload {task=} dataset to {input_uri!r}.")
 
 
 def load_dataset(
