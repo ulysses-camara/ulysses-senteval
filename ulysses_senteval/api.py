@@ -467,6 +467,16 @@ class UlyssesSentEval:
             - `std_metric_eval_per_epoch` (npt.NDArray): std. (across k-folds & CV repetitions) validation metric per epoch;
             - `std_loss_test` (float): std. (across CV repetitions) test loss;
             - `std_metric_test` (float): std. (across CV repetitions) test metric;
+            - `ci99_low_loss_train_per_epoch` (npt.NDArray): lower bound to 99% confidence interval for `avg_loss_train_per_epoch`;
+            - `ci99_low_loss_eval_per_epoch` (npt.NDArray): lower bound to 99% confidence interval for `avg_loss_eval_per_epoch`;
+            - `ci99_low_metric_eval_per_epoch` (npt.NDArray): lower bound to 99% confidence interval for `avg_metric_eval_per_epoch`;
+            - `ci99_low_loss_test` (float): lower bound to 99% confidence interval for `avg_loss_test`;
+            - `ci99_low_metric_test` (float): lower bound to 99% confidence interval for `avg_metric_test`;
+            - `ci99_high_loss_train_per_epoch` (npt.NDArray): upper bound to 99% confidence interval for `avg_loss_train_per_epoch`;
+            - `ci99_high_loss_eval_per_epoch` (npt.NDArray): upper bound to 99% confidence interval for `avg_loss_eval_per_epoch`;
+            - `ci99_high_metric_eval_per_epoch` (npt.NDArray): upper bound to 99% confidence interval for `avg_metric_eval_per_epoch`;
+            - `ci99_high_loss_test` (float): upper bound to 99% confidence interval for `avg_loss_test`;
+            - `ci99_high_metric_test` (float): upper bound to 99% confidence interval for `avg_metric_test`.
 
         all_results : pd.DataFrame (optional, only if `return_all_results=True`)
             Pandas DataFrame containing all unaggregated statistics collected from the training procedure.
