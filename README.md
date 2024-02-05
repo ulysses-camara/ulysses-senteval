@@ -32,30 +32,49 @@ python -m pip install -U "git+https://github.com/ulysses-camara/ulysses-senteval
 
 ## Task list
 
-Task ID | Category | 
-:--     | :--      |
-TO      | DO.      |
+Task ID | Task Name | 
+:--     | :--       |
+`F1A`   | Masked law names in legislative bill summaries         |
+`F1B`   | Masked law names in governmental news                  |
+`F2`    | Legal Code, Statutes, and CF/88 segment classification |
+`F3`    | OAB -- first part                  |
+`F4`    | OAB -- second part                 |
+`F5`    | TRFs examinations                  |
+`F6`    | STJ summary matching               |
+`G1`    | Legislative bill summary to topics |
+`G2A`   | Semantic search in governmental news |
+`G2B`   | Legislative bill summaries to legislative bill contents |
+`G3`    | Governmental FAQs question-answer matching |
+`G4`    | [Stance Detection (Ulysses SD)](https://github.com/Dyonnatan/UlyssesSD-Br) |
+`T1A`   | [HateBR (Offensive language detection)](https://github.com/franciellevargas/HateBR) |
+`T1B`   | [OffComBR2 (Offensive language detection)](https://github.com/rogersdepelle/OffComBR) |
+`T2A`   | [FactNews (bias detection)](https://github.com/franciellevargas/FactNews) |
+`T2B`   | [FactNews (factuality check)](https://github.com/franciellevargas/FactNews) |
+`T3`    | [Fake.Br (fake news detection)](https://github.com/roneysco/Fake.br-Corpus) |
+`T4`    | Tampered legislation detection |
+
 
 ---
 
 ## Evaluation and usage specifications
 
+- Each task is posed as a classification task;
 - For each task, a classifier is trained on top of the embedding model under evaluation;
 - The embedding model is not updated during the training, just the classifier attached on top of it;
 - The classifier architecture is a Logistic Regression except for tasks `F3` and `F5`, in which case it is a feedforward network with 256 hidden units instead;
-- The optimizer used is AdamW with weight decay `0.01`;
+- Binary tasks are evaluated with Matthews Correlaction Coefficient, whereas multiclass tasks are evaluated using Macro F1-Score adjusted for randomness;
+- The optimizer used is AdamW with weight decay $w=0.01$;
 - Although the train hyper-parameters can be changed using the appropriate API parameters, the standard values must be used to compare models;
 - Every pseudo-random number generation is controlled during the execution of this package, hence multiple runs will hold the exact same results;
-- Each task is validated using $10x5$-fold repeated cross validation;
+- Each task is validated using $10 \times 5-$fold repeated cross validation;
 - Each training procedure is strictly balanced (all classes have the exact same number of instances) using undersampling;
 - Before each training procedure, a quick hyper-parameter search is issues using grid search for 8 epochs in the following search domain:
-    - learning rate $\eta$: ${5e-4, 1e-3, 2e-3}$;
-    - Adam's $\beta_1$ ${0.80, 0.90}$; and
-    - Adam's $\beta_2$: ${0.990, 0.999}$.
+    - learning rate $\eta$: $\{5e-4, 1e-3, 2e-3\}$;
+    - Adam's $\beta_1$ $\{0.80, 0.90\}$; and
+    - Adam's $\beta_2$: $\{0.990, 0.999\}$.
 - Task datasets are downloaded automatically.
 
 ---
-
 
 ## Examples
 
@@ -70,6 +89,8 @@ evaluator = ulysses_senteval.UlyssesSentEval(sbert)
 res = evaluator.evaluate()
 print(res)
 ```
+
+---
 
 ## Additional options
 
@@ -148,19 +169,100 @@ Run `help(ulysses_senteval.UlyssesSentEval.evaluate)` for more information.
 
 ### Changing embedding method and parameters
 
-The standard embedding method is inspired by the original SentEval
+The standard embedding method is inspired by the original SentEval specification: $E = (E_{a}, E_{b}, |E_{a} - E_{b}|, E_{a} * E_{b})$, where $E_{a}$ and $E_{b}$ are the individual embeddings for a pair of textual inputs $(x_{a}, x_{b})$.
+If the task is not paired, then the standard embedding is simply $E_a$.
+
+To use your own embedding method, you must overwrite the `UlyssesSentEval.embed` method as follows:
 
 ```python
+import ulysses_senteval
+
+
+class MyCustomEmbedder(ulysses_senteval.UlyssesSentEval):
+    def embed(self,
+              X_a: t.List[str],
+              X_b: t.Optional[t.List[str]],
+              task: str,
+              data_split: str,
+              **kwargs: t.Any) -> torch.Tensor:
+        """Custom embedding method.
+
+        Parameters
+        ----------
+        X_a : list of texts A of length N. 
+        X_b : list of texts B of length N. May be None.
+        task : task identifier.
+        data_split : a split from {'train', 'test', 'eval'}; useful for lazy embedders.
+        **kwargs : any additional embedding arguments provided by the user.
+        """
+        out: torch.Tensor
+        # Your embedding procedure...
+        return out  # type: torch.Tensor
+
+
+my_custom_evaluator = MyCustomEmbedder(sbert)
+res = my_custom_evaluator.evaluate()
+print(res)
+```
+
+The embedding method is considered part of the model under evaluation, i.e., changing the embedding method requires an entirely new evaluation.
+
+To pass new parameters to the `ulysses_senteval.UlyssesSentEval.embed` method, use the parameter `ulysses_senteval.UlyssesSentEval.evaluate(kwargs_embed={...})` as shown in the example below. This parameter is unpacked into the `sentence_transformers.SentenceTransformer.encode` method automatically in the default embedding scheme. You can recover user arguments from the `**kwargs` in your custom implementation.
+
+```python
+kwargs_embed = {
+  "batch_size": 128,
+  "show_progress_bar": True,
+}
+
+res = ulysses_senteval.UlyssesSentEval.evaluate(kwargs_embed=kwargs_embed)
+print(res)
 ```
 
 ### Using lazy embedders
 
+Lazy embedders, e.g., TF-IDF, need a "special" embedding scheme since they need to be fitted again for each k-fold partition and repetition only in the train split in order to avoid contamining the results.
+For that we provided a ready-to-use class, `UlyssesSentEvalLazy`, which handles this situation adequately.
+
 ```python
+import sklearn.feature_extraction.text
+import nltk
+
+
+tf_idf_embedder = sklearn.feature_extraction.text.TfidfVectorizer(
+    ngram_range=(1, 3),
+    max_features=3000,
+    stop_words=ltk.corpus.stopwords.words("portuguese"),
+)
+
+evaluator = ulysses_senteval.UlyssesSentEvalLazy(tf_idf_embedder)
+res = evaluator.evaluate()
+print(res)
 ```
 
 ---
 
 ## Paired data and baseline sentence model
+
+We also have a ready-to-use paired dataset with 4.5 million sentences derived from [Ulysses Tesemõ](https://github.com/ulysses-camara/ulysses-tesemo), a Brazilian-only governmental textual compilation, comprising legislative sources (e.g., Chamber of Deputies, Federal Senate, National Congress), judiciary sources (e.g, TRFs, every Justice of Courts), and executive governmental branch (e.g., governmental news from every Brazilian state). You can download this paired dataset [here](TODO) (Soon).
+
+Our strongest baseline Sentence Transformer, trained with the paired dataset presented above, can be downloaded using [Ulysses Fetcher](https://github.com/ulysses-camara/ulysses-fetcher) as follows:
+
+1. Install Ulysses Fetcher using pip:
+```bash
+python -m pip install "git+https://github.com/ulysses-camara/ulysses-fetcher"
+```
+
+2. Use the `buscador` API to download the model as follows:
+```bash
+python -m buscador "sentence_similarity" "legal_sroberta_v1"
+```
+
+3. Alternatively, you can download it programmatically in Python:
+```python
+import buscador
+buscador.download_resource(task="sentence_similarity", resource_name="legal_sroberta_v1")
+```
 
 ---
 
