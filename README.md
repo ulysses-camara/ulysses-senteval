@@ -1,6 +1,6 @@
 # Ulysses SentEval: evaluation of sentence embeddings in Brazilian legal domain
 
-Evaluation of textual embeddings for the Brazilian legal domain, similar to the [SentEval](https://github.com/facebookresearch/SentEval) package for the English language and general domain.
+Evaluation of text sentence embeddings for the Brazilian legal domain, similar to the [SentEval](https://github.com/facebookresearch/SentEval) package for the English general domain.
 
 ---
 
@@ -58,20 +58,20 @@ Task ID | Task Name |
 
 ## Evaluation and usage specifications
 
-- Each task is posed as a classification task;
+- Each task set up as a classification task;
 - For each task, a classifier is trained on top of the embedding model under evaluation;
-- The embedding model is not updated during the training, just the classifier attached on top of it;
-- The classifier architecture is a Logistic Regression except for tasks `F3` and `F5`, in which case it is a feedforward network with 256 hidden units instead;
-- Binary tasks are evaluated with Matthews Correlaction Coefficient, whereas multiclass tasks are evaluated using Macro F1-Score adjusted for randomness;
-- The optimizer used is AdamW with weight decay $w=0.01$;
-- Although the train hyper-parameters can be changed using the appropriate API parameters, the standard values must be used to compare models;
-- Every pseudo-random number generation is controlled during the execution of this package, hence multiple runs will hold the exact same results;
-- Each task is validated using $10 \times 5-$fold repeated cross validation;
-- Each training procedure is strictly balanced (all classes have the exact same number of instances) using undersampling;
-- Before each training procedure, a quick hyper-parameter search is issues using grid search for 8 epochs in the following search domain:
-    - learning rate $\eta$: $\{5e-4, 1e-3, 2e-3\}$;
-    - Adam's $\beta_1$ $\{0.80, 0.90\}$; and
-    - Adam's $\beta_2$: $\{0.990, 0.999\}$.
+- The embedding model is not updated during the training, only the classifier attached on top of it is trained;
+- The classifier architecture is a Logistic Regression, except for tasks `F3` and `F5`, where it is a feedforward network with 256 hidden units;
+- Binary tasks are evaluated with Matthews Correlaction Coefficient, while multiclass tasks are evaluated using Macro F1-Score adjusted for randomness;
+- The optimizer used is AdamW with weight decay $w_\text{decay}=0.01$;
+- Although the training hyperparameters can be changed using the appropriate API parameters, standard values must be used to compare models;
+- Every pseudo-random number generation is controlled during the execution of this package, ensuring consistent results across multiple runs;
+- Each task is validated using $10$x$5-$fold repeated cross validation;
+- Each training procedure is strictly balanced, with all classes having the exact same number of instances, achieved using undersampling;
+- Before each training procedure, a quick hyper-parameter search is conducted using grid search for 8 epochs, with the following search domain:
+    - learning rate $\eta$: ${5e-4, 1e-3, 2e-3}$;
+    - Adam's $\beta_{1}$: ${0.80, 0.90}$; and
+    - Adam's $\beta_{2}$: ${0.990, 0.999}$.
 - Task datasets are downloaded automatically.
 
 ---
@@ -96,10 +96,10 @@ print(res)
 
 ### Recover all unaggregated results
 
-This package aggregates results by epoch/k-fold partitions/train repetitions automatically.
-More specifically, the arithmetic average, standard deviation, and lower and upper bounds to the 99% confidence intervals (estimated using boostrapping) are returned for evaluation metric and loss function values for train, validation, and test splits.
+This package automatically aggregates results by epoch/k-fold partitions/train repetitions.
+Specifically, it calculates the arithmetic average, standard deviation, and lower and upper bounds of the 99% confidence intervals (estimated using bootstrapping) for the task's evaluation metric and loss function values across train, validation, and test splits.
 
-However, we provide an option to recover all unaggregated results aswell, so you can visualize all results and/or aggregate the data using your own methods.
+However, we also provide an option to retrieve all unaggregated results, allowing you to visualize all results and/or aggregate the data using your own methods.
 
 ```python
 import typing as t
@@ -131,13 +131,11 @@ res_nonagg: pd.DataFrame
 
 ### Embed cache
 
-Since embedding models are not optimized during evaluation, the task embeddings can be cached for future usage.
-Caching embedding is useful only when changing the train hyper-parameters, but note that different hyper-parameter setup may invalidate standard
-comparison of distinct models, so use this resource at your own risk.
+Since embedding models are not optimized during evaluation, the task embeddings can be cached for future use.
+Caching embeddings is useful only when changing the train hyper-parameters. However, note that different hyper-parameter setups may invalidate standard comparison of distinct models, so use this resource at your own risk.
 Caching is disabled for lazy embedders (e.g., TF-IDF), since they need to be rebuilt for each k-fold partition.
 
-To enable embed caching, you just need to specify the `cache_embed_key` parameter to some value that uniquely identifies your embedding model.
-You can use your model's name, for example.
+To enable embed caching, you just need to specify the `ulysses_senteval.UlyssesSentEval(cache_embed_key="...")` parameter to some value that uniquely identifies your embedding model. For example, you can use your model's name.
 
 ```python
 evaluator = ulysses_senteval.UlyssesSentEval(
@@ -149,7 +147,7 @@ evaluator = ulysses_senteval.UlyssesSentEval(
 
 ### Evaluation using multiprocessing
 
-You can enable multiprocessing during your evaluation, such that classifiers are trained in parallel up to the number of specified number of processes.
+You can enable multiprocessing during your evaluation so that classifiers are trained in parallel, up to the specified number of processes.
 
 ```python
 evaluator = ulysses_senteval.UlyssesSentEval(sbert)
@@ -160,12 +158,7 @@ print(res)
 Run `help(ulysses_senteval.UlyssesSentEval.evaluate)` for more information. 
 
 > __Known issues__:
-  mixing CUDA and multiprocessing is *awkward*, and can lead to some unexpected behaviors.
-  For instance, you can not initialize CUDA environment before spawning child processes, or else using CUDA in children processes will be disabled.
-  This prevents you from training and evaluating your model using CUDA and multiprocessing in the same process.
-  Also, mixing multithreading and multiprocessing can lead to deadlocks.
-  We try to circumvent these known issues by disabling multithreading and/or multiprocessing whenever appropriate automatically and/or initializing CUDA only in children processes.
-  In the worst case scenario, your execution should fallback to a single process.
+  Mixing CUDA and multiprocessing can be awkward and may lead to unexpected behaviors. For instance, initializing the CUDA environment before spawning child processes disables CUDA usage in the children processes. Consequently, you cannot train and evaluate your model using CUDA and multiprocessing in the same process. Additionally, mixing multithreading and multiprocessing can result in deadlocks. We attempt to address these known issues by automatically disabling multithreading and/or multiprocessing when necessary, and initializing CUDA only in children processes. In the worst-case scenario, your execution should fallback to a single process.
 
 ### Changing embedding method and parameters
 
@@ -221,8 +214,8 @@ print(res)
 
 ### Using lazy embedders
 
-Lazy embedders, e.g., TF-IDF, need a "special" embedding scheme since they need to be fitted again for each k-fold partition and repetition only in the train split in order to avoid contamining the results.
-For that we provided a ready-to-use class, `UlyssesSentEvalLazy`, which handles this situation adequately.
+Lazy embedders, e.g., TF-IDF, require a "special" embedding scheme because they need to be fitted again for each k-fold partition and repetition, but only in the train splits, in order to avoid contaminating the results.
+For this purpose, we have provided a ready-to-use class called `UlyssesSentEvalLazy`, which handles this situation adequately.
 
 ```python
 import sklearn.feature_extraction.text
@@ -244,9 +237,9 @@ print(res)
 
 ## Paired data and baseline sentence model
 
-We also have a ready-to-use paired dataset with 4.5 million sentences derived from [Ulysses Tesemõ](https://github.com/ulysses-camara/ulysses-tesemo), a Brazilian-only governmental textual compilation, comprising legislative sources (e.g., Chamber of Deputies, Federal Senate, National Congress), judiciary sources (e.g, TRFs, every Justice of Courts), and executive governmental branch (e.g., governmental news from every Brazilian state). You can download this paired dataset [here](TODO) (Soon).
+We also provide a ready-to-use paired dataset with 4.5 million sentences derived from [Ulysses Tesemõ](https://github.com/ulysses-camara/ulysses-tesemo), a compilation of Brazilian governmental texts. This dataset includes legislative sources (e.g., Chamber of Deputies, Federal Senate, National Congress), judiciary sources (e.g, TRFs, Courts of Justice), and the governmental executive branch (e.g., governmental news from every Brazilian state). You can download this paired dataset [here](TODO) (comming soon).
 
-Our strongest baseline Sentence Transformer, trained with the paired dataset presented above, can be downloaded using [Ulysses Fetcher](https://github.com/ulysses-camara/ulysses-fetcher) as follows:
+Our strongest baseline Sentence Transformer, trained with the aforementioned paired dataset, can be downloaded using [Ulysses Fetcher](https://github.com/ulysses-camara/ulysses-fetcher) as follows:
 
 1. Install Ulysses Fetcher using pip:
 ```bash
