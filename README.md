@@ -69,9 +69,9 @@ Task ID | Task Name |
 - Each task is validated using $10$x$5-$fold repeated cross validation;
 - Each training procedure is strictly balanced, with all classes having the exact same number of instances, achieved using undersampling;
 - Before each training procedure, a quick hyper-parameter search is conducted using grid search for 8 epochs, with the following search domain:
-    - learning rate $\eta$: ${5e-4, 1e-3, 2e-3}$;
-    - Adam's $\beta_{1}$: ${0.80, 0.90}$; and
-    - Adam's $\beta_{2}$: ${0.990, 0.999}$.
+    - learning rate $\eta$: $(5e-4, 1e-3, 2e-3)$;
+    - Adam's $\beta_{1}$: $(0.80, 0.90)$; and
+    - Adam's $\beta_{2}$: $(0.990, 0.999)$.
 - Task datasets are downloaded automatically.
 
 ---
