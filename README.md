@@ -84,8 +84,11 @@ Below we provide a minimal usage example to evaluate a Sentence Transformer:
 import ulysses_senteval
 import sentence_transformers
 
+import torch
+disable_multiprocessing=torch.cuda.is_available()  # NOTE: CUDA might conflict with multiprocessing.
+
 sbert = sentence_transformers.SentenceTransformer("path/to/sbert", device="cuda:0")
-evaluator = ulysses_senteval.UlyssesSentEval(sbert)
+evaluator = ulysses_senteval.UlyssesSentEval(sbert, tasks="all", disable_multiprocessing=disable_multiprocessing)
 res = evaluator.evaluate()
 print(res)
 ```
